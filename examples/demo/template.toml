@@ -1,0 +1,10 @@
+# demo tool configuration (schema v3)
+
+version = 3
+
+[server]
+host = "localhost"
+port = 8080
+
+[log]
+level = "info"
