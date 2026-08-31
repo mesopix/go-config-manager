@@ -1,9 +1,0 @@
-# A schema v1 config from an old release. Copy it over the config file and
-# run the demo once: it migrates to v3 in one go, keeping untouched fields
-# (server.port) and saving the original at config.toml.bak.
-
-version = 1
-legacy_name = "old-field"
-
-[server]
-port = 8080
