@@ -12,3 +12,11 @@ port, _ := c.Get("port")
 ```
 
 Note: JSON numbers come back as `float64` from `Get`.
+
+## Demo
+
+```sh
+go run ./examples/demo
+```
+
+Run it twice: first run creates `demo-config.json`, second run loads it.
