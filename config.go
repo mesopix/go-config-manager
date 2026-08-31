@@ -7,53 +7,6 @@ import (
 	"path/filepath"
 )
 
-// Config holds configuration values backed by a JSON file on disk.
-type Config struct {
-	path string
-	data map[string]any
-}
-
-// load reads the JSON file at path into a new Config.
-// A missing file is an error.
-func load(path string) (*Config, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	c := &Config{path: path, data: map[string]any{}}
-	if err := json.Unmarshal(b, &c.data); err != nil {
-		return nil, err
-	}
-	return c, nil
-}
-
-// Get returns the value stored under key and whether it exists.
-// JSON numbers unmarshal as float64.
-func (c *Config) Get(key string) (any, bool) {
-	v, ok := c.data[key]
-	return v, ok
-}
-
-// Set stores value under key.
-func (c *Config) Set(key string, value any) {
-	c.data[key] = value
-}
-
-// configFileMode is rw-r--r--: owner reads/writes, others read-only.
-const configFileMode = 0o644
-
-// Save writes the current values back to the JSON file.
-func (c *Config) Save() error {
-	b, err := json.MarshalIndent(c.data, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(c.path, b, configFileMode)
-}
-
-// configDirMode is rwxr-xr-x: dirs only need to be listable by others.
-const configDirMode = 0o755
-
 // LoadAppConfig loads the config for appName. On first run the file is created
 // from template, so a config is always returned unless an I/O or parse
 // error occurs. Values are read back from disk, so numbers are float64.
@@ -82,6 +35,8 @@ func LoadAppConfig(appName string, template map[string]any) (*Config, error) {
 
 	// 代码能走到这里，说明是第一次运行
 	// 首先创建配置目录
+	// configDirMode is rwxr-xr-x: dirs only need to be listable by others.
+	const configDirMode = 0o755
 	if err := os.MkdirAll(filepath.Dir(path), configDirMode); err != nil {
 		return nil, err
 	}
@@ -98,4 +53,48 @@ func LoadAppConfig(appName string, template map[string]any) (*Config, error) {
 		return nil, err
 	}
 	return load(path)
+}
+
+// Config holds configuration values backed by a JSON file on disk.
+type Config struct {
+	path string
+	data map[string]any
+}
+
+// Get returns the value stored under key and whether it exists.
+// JSON numbers unmarshal as float64.
+func (c *Config) Get(key string) (any, bool) {
+	v, ok := c.data[key]
+	return v, ok
+}
+
+// Set stores value under key.
+func (c *Config) Set(key string, value any) {
+	c.data[key] = value
+}
+
+// configFileMode is rw-r--r--: owner reads/writes, others read-only.
+const configFileMode = 0o644
+
+// Save writes the current values back to the JSON file.
+func (c *Config) Save() error {
+	b, err := json.MarshalIndent(c.data, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(c.path, b, configFileMode)
+}
+
+// load reads the JSON file at path into a new Config.
+// A missing file is an error.
+func load(path string) (*Config, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	c := &Config{path: path, data: map[string]any{}}
+	if err := json.Unmarshal(b, &c.data); err != nil {
+		return nil, err
+	}
+	return c, nil
 }
