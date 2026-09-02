@@ -23,7 +23,7 @@ func TestLoad_validJSON(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
 
-	content := []byte(`{"name": "demo", "port": 8080, "debug": true}`)
+	content := []byte(`{"meta": {"schema_version": "1.0.0"}, "fields": {"name": "demo", "port": 8080, "debug": true}}`)
 	if err := os.WriteFile(path, content, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -41,6 +41,9 @@ func TestLoad_validJSON(t *testing.T) {
 	}
 	if debug, ok := c.Get("debug"); !ok || debug != true {
 		t.Errorf("debug = %v, %v; want true, true", debug, ok)
+	}
+	if c.DeclaredVersion() != "1.0.0" {
+		t.Errorf("DeclaredVersion = %q, want 1.0.0", c.DeclaredVersion())
 	}
 }
 
@@ -93,7 +96,7 @@ func TestLoad_fileNotFound(t *testing.T) {
 func TestSaveLoad(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 
-	c := &Config{path: path, data: map[string]any{}}
+	c := &Config{path: path, data: map[string]any{"meta": map[string]any{}, "fields": map[string]any{}}, resolvedVersion: UnknownVersion}
 	c.Set("name", "demo")
 	c.Set("port", 8080)
 	if err := c.Save(); err != nil {
@@ -117,7 +120,7 @@ func TestSaveLoad(t *testing.T) {
 func TestLoadAppConfigDirPermissions(t *testing.T) {
 	useTempConfigDir(t)
 
-	defaultJSON := []byte(`{"key": "value"}`)
+	defaultJSON := []byte(`{"meta": {"schema_version": "1.0.0"}, "fields": {"key": "value"}}`)
 	if _, err := LoadAppConfig("permtest", defaultJSON); err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +142,7 @@ func TestSaveAtomic(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
 
-	c := &Config{path: path, data: map[string]any{}}
+	c := &Config{path: path, data: map[string]any{"meta": map[string]any{}, "fields": map[string]any{}}, resolvedVersion: UnknownVersion}
 	c.Set("key", "value")
 	if err := c.Save(); err != nil {
 		t.Fatal(err)

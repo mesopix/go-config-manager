@@ -54,7 +54,8 @@ func LoadAppConfig(appName string, defaultJSON []byte) (*Config, error) {
 	}
 
 	// 构造配置对象并填充默认值
-	c = &Config{path: path, data: defaults}
+	c = &Config{path: path, data: defaults, resolvedVersion: UnknownVersion}
+	c.declaredVersion = extractVersion(defaults)
 
 	// 保存配置到文件
 	if err := c.Save(); err != nil {
@@ -65,22 +66,70 @@ func LoadAppConfig(appName string, defaultJSON []byte) (*Config, error) {
 	return load(path)
 }
 
+// UnknownVersion 表示无法识别的数据版本号。
+const UnknownVersion = "UNKNOWN"
+
 // Config 持有以磁盘 JSON 文件为后端的配置值。
+// data 存储完整的 {meta, fields} 两层结构。
 type Config struct {
-	path string
-	data map[string]any
+	path            string
+	data            map[string]any
+	declaredVersion string // 从 config.json meta.schema_version 读取的原始版本
+	resolvedVersion string // 经 schema 校验后确定的实际版本
 }
 
-// Get 返回 key 下存储的值以及它是否存在。
+// DeclaredVersion 返回 config.json 中声明的数据版本号。
+// 无法识别时返回 UnknownVersion。
+func (c *Config) DeclaredVersion() string {
+	return c.declaredVersion
+}
+
+// ResolvedVersion 返回经 schema 校验后确定的实际数据版本号。
+// 未经校验或无法识别时返回 UnknownVersion。
+func (c *Config) ResolvedVersion() string {
+	return c.resolvedVersion
+}
+
+// ResolveVersion 在 schema 校验通过后调用，将 resolvedVersion 设为
+// schema 的 meta.version。若 schemaVersion 为空则设为 UnknownVersion。
+func (c *Config) ResolveVersion(schemaVersion string) {
+	if schemaVersion == "" {
+		c.resolvedVersion = UnknownVersion
+	} else {
+		c.resolvedVersion = schemaVersion
+	}
+}
+
+// fields 返回 data 中 "fields" 层的 map。
+// 若不存在则返回空 map（不修改 data）。
+func (c *Config) fields() map[string]any {
+	if f, ok := c.data["fields"].(map[string]any); ok {
+		return f
+	}
+	return map[string]any{}
+}
+
+// Meta 返回 data 中 "meta" 层的 map（只读访问）。
+func (c *Config) Meta() map[string]any {
+	if m, ok := c.data["meta"].(map[string]any); ok {
+		return m
+	}
+	return map[string]any{}
+}
+
+// Get 返回 fields 层中 key 下存储的值以及它是否存在。
 // JSON 数值会被反序列化为 float64。
 func (c *Config) Get(key string) (any, bool) {
-	v, ok := c.data[key]
+	v, ok := c.fields()[key]
 	return v, ok
 }
 
-// Set 将 value 存储到 key 下。
+// Set 将 value 存储到 fields 层的 key 下。
 func (c *Config) Set(key string, value any) {
-	c.data[key] = value
+	if _, ok := c.data["fields"].(map[string]any); !ok {
+		c.data["fields"] = map[string]any{}
+	}
+	c.data["fields"].(map[string]any)[key] = value
 }
 
 // Save 以原子方式把当前值写回 JSON 文件。
@@ -135,15 +184,31 @@ func (c *Config) Save() error {
 }
 
 // load 读取 path 处的 JSON 文件到一个新的 Config 中。
-// 文件不存在视为错误。
+// 文件不存在视为错误。加载后自动提取 declaredVersion。
 func load(path string) (*Config, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	c := &Config{path: path, data: map[string]any{}}
+	c := &Config{path: path, data: map[string]any{}, resolvedVersion: UnknownVersion}
 	if err := json.Unmarshal(b, &c.data); err != nil {
 		return nil, err
 	}
+	// 提取 declaredVersion
+	c.declaredVersion = extractVersion(c.data)
 	return c, nil
+}
+
+// extractVersion 从 {meta: {schema_version: "..."}} 中提取版本号。
+// 任何缺失或类型不匹配均返回 UnknownVersion。
+func extractVersion(data map[string]any) string {
+	meta, ok := data["meta"].(map[string]any)
+	if !ok {
+		return UnknownVersion
+	}
+	v, ok := meta["schema_version"].(string)
+	if !ok || v == "" {
+		return UnknownVersion
+	}
+	return v
 }

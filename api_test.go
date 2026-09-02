@@ -22,7 +22,7 @@ func useTempConfigDir(t *testing.T) {
 func TestLoadAppConfigCreatesFromTemplate(t *testing.T) {
 	useTempConfigDir(t)
 
-	defaultJSON := []byte(`{"name": "demo", "port": 8080}`)
+	defaultJSON := []byte(`{"meta": {}, "fields": {"name": "demo", "port": 8080}}`)
 	c, err := configmanager.LoadAppConfig("myapp", defaultJSON)
 	if err != nil {
 		t.Fatal(err)
@@ -56,7 +56,7 @@ func TestLoadAppConfigCreatesFromTemplate(t *testing.T) {
 func TestLoadAppConfigNumbersAreFloat64(t *testing.T) {
 	useTempConfigDir(t)
 
-	defaultJSON := []byte(`{"port": 8080}`)
+	defaultJSON := []byte(`{"meta": {}, "fields": {"port": 8080}}`)
 
 	c, err := configmanager.LoadAppConfig("myapp", defaultJSON)
 	if err != nil {
@@ -100,7 +100,7 @@ func TestLoadAppConfig_invalidDefaultJSON(t *testing.T) {
 func TestLoadAppConfig_autoCreatesWhenMissing(t *testing.T) {
 	useTempConfigDir(t)
 
-	defaultJSON := []byte(`{"host": "localhost", "port": 3000}`)
+	defaultJSON := []byte(`{"meta": {}, "fields": {"host": "localhost", "port": 3000}}`)
 	c, err := configmanager.LoadAppConfig("newapp", defaultJSON)
 	if err != nil {
 		t.Fatalf("first LoadAppConfig: unexpected error: %v", err)
@@ -122,7 +122,7 @@ func TestLoadAppConfig_autoCreatesWhenMissing(t *testing.T) {
 func TestLoadAppConfig_saveLoadRoundTrip(t *testing.T) {
 	useTempConfigDir(t)
 
-	defaultJSON := []byte(`{"key": "original"}`)
+	defaultJSON := []byte(`{"meta": {}, "fields": {"key": "original"}}`)
 	c, err := configmanager.LoadAppConfig("roundtrip", defaultJSON)
 	if err != nil {
 		t.Fatal(err)
@@ -152,7 +152,7 @@ func TestLoadAppConfig_saveLoadRoundTrip(t *testing.T) {
 func TestLoadAppConfig_secondLoadIgnoresDefaults(t *testing.T) {
 	useTempConfigDir(t)
 
-	defaultJSON := []byte(`{"color": "red"}`)
+	defaultJSON := []byte(`{"meta": {}, "fields": {"color": "red"}}`)
 	c, err := configmanager.LoadAppConfig("overwrite", defaultJSON)
 	if err != nil {
 		t.Fatal(err)
@@ -164,7 +164,7 @@ func TestLoadAppConfig_secondLoadIgnoresDefaults(t *testing.T) {
 	}
 
 	// 用不同的默认值再次加载，应读到磁盘上的 "blue" 而非新默认的 "green"。
-	newDefaultJSON := []byte(`{"color": "green"}`)
+	newDefaultJSON := []byte(`{"meta": {}, "fields": {"color": "green"}}`)
 	c2, err := configmanager.LoadAppConfig("overwrite", newDefaultJSON)
 	if err != nil {
 		t.Fatal(err)
@@ -179,7 +179,7 @@ func TestLoadAppConfig_secondLoadIgnoresDefaults(t *testing.T) {
 func TestLoadAppConfig_getMissingKey(t *testing.T) {
 	useTempConfigDir(t)
 
-	defaultJSON := []byte(`{"exists": true}`)
+	defaultJSON := []byte(`{"meta": {}, "fields": {"exists": true}}`)
 	c, err := configmanager.LoadAppConfig("missingkey", defaultJSON)
 	if err != nil {
 		t.Fatal(err)
@@ -199,7 +199,7 @@ func TestLoadAppConfig_getMissingKey(t *testing.T) {
 func TestSchema_checkWithConfig(t *testing.T) {
 	useTempConfigDir(t)
 
-	defaultJSON := []byte(`{"host": "localhost", "port": 8080}`)
+	defaultJSON := []byte(`{"meta": {}, "fields": {"host": "localhost", "port": 8080}}`)
 	c, err := configmanager.LoadAppConfig("schematest", defaultJSON)
 	if err != nil {
 		t.Fatal(err)
@@ -229,7 +229,7 @@ func TestSchema_normalizeAndSaveBack(t *testing.T) {
 	useTempConfigDir(t)
 
 	// 首次加载只有 host，缺少 port
-	defaultJSON := []byte(`{"host": "localhost"}`)
+	defaultJSON := []byte(`{"meta": {}, "fields": {"host": "localhost"}}`)
 	c, err := configmanager.LoadAppConfig("normtest", defaultJSON)
 	if err != nil {
 		t.Fatal(err)
