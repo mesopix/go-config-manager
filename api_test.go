@@ -193,3 +193,84 @@ func TestLoadAppConfig_getMissingKey(t *testing.T) {
 		t.Errorf("Get(nonexistent): value = %v; want nil", val)
 	}
 }
+
+// ---------- Schema + Config 协作：Check 端到端 ----------
+
+func TestSchema_checkWithConfig(t *testing.T) {
+	useTempConfigDir(t)
+
+	defaultJSON := []byte(`{"host": "localhost", "port": 8080}`)
+	c, err := configmanager.LoadAppConfig("schematest", defaultJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	schema := configmanager.Schema{
+		"host": {Type: configmanager.TypeString, Required: true},
+		"port": {Type: configmanager.TypeFloat, Required: true},
+	}
+
+	// 从 Config 提取 data 用于 Check
+	data := map[string]any{}
+	for _, key := range []string{"host", "port"} {
+		if v, ok := c.Get(key); ok {
+			data[key] = v
+		}
+	}
+
+	if got := schema.Check(data); got != configmanager.Valid {
+		t.Errorf("Check = %d, want Valid", got)
+	}
+}
+
+// ---------- Schema + Config 协作：Normalize 补全后写回 ----------
+
+func TestSchema_normalizeAndSaveBack(t *testing.T) {
+	useTempConfigDir(t)
+
+	// 首次加载只有 host，缺少 port
+	defaultJSON := []byte(`{"host": "localhost"}`)
+	c, err := configmanager.LoadAppConfig("normtest", defaultJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	schema := configmanager.Schema{
+		"host": {Type: configmanager.TypeString, Required: true},
+		"port": {Type: configmanager.TypeFloat, Default: float64(3000)},
+	}
+
+	// 提取当前 data
+	data := map[string]any{}
+	if v, ok := c.Get("host"); ok {
+		data["host"] = v
+	}
+
+	// Check 应为 MissingDefaults
+	if got := schema.Check(data); got != configmanager.MissingDefaults {
+		t.Fatalf("Check = %d, want MissingDefaults", got)
+	}
+
+	// Normalize 补全
+	normalized, err := schema.Normalize(data)
+	if err != nil {
+		t.Fatalf("Normalize: unexpected error: %v", err)
+	}
+
+	// 将补全后的值写回 Config 并保存
+	for k, v := range normalized {
+		c.Set(k, v)
+	}
+	if err := c.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	// 重新加载验证 port 已持久化
+	c2, err := configmanager.LoadAppConfig("normtest", defaultJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if port, ok := c2.Get("port"); !ok || port != float64(3000) {
+		t.Errorf("port after normalize+save = %v, %v; want 3000, true", port, ok)
+	}
+}
