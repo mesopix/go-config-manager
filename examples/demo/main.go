@@ -3,6 +3,7 @@ package main
 
 import (
 	_ "embed"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -16,6 +17,11 @@ import (
 //
 //go:embed default_config.json
 var defaultConfigJSON []byte
+
+// embeddedSchemaJSON 为嵌入的 schema 定义，编译时打包进二进制。
+//
+//go:embed schema.json
+var embeddedSchemaJSON []byte
 
 // exeName 从 os.Args[0] 风格的路径中返回不带扩展名的可执行文件名
 // （demo.exe -> demo）。
@@ -43,11 +49,10 @@ func main() {
 	debug, _ := c.Get("debug")
 	fmt.Printf("name=%v port=%v debug=%v\n", name, port, debug)
 
-	// 定义 schema 并检查配置状态
-	schema := configmanager.Schema{
-		"name":  {Type: configmanager.TypeString, Required: true},
-		"port":  {Type: configmanager.TypeFloat, Required: false, Default: float64(8080)},
-		"debug": {Type: configmanager.TypeBool, Required: false, Default: false},
+	// 从嵌入的 JSON 反序列化 schema
+	var schema configmanager.Schema
+	if err := json.Unmarshal(embeddedSchemaJSON, &schema); err != nil {
+		log.Fatalf("parse embedded schema: %v", err)
 	}
 
 	// 提取当前配置数据用于检查
