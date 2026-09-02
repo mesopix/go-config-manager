@@ -20,9 +20,13 @@ import "github.com/mesopix/go-config-manager"
 
 ## Usage
 
+Create a `default_config.json` template file and embed it:
+
 ```go
-tpl := map[string]any{"port": 8080, "debug": true}
-c, err := configmanager.LoadAppConfig("myapp", tpl) // always returns a config
+//go:embed default_config.json
+var defaultConfigJSON []byte
+
+c, err := configmanager.LoadAppConfig("myapp", defaultConfigJSON) // always returns a config
 if err != nil { ... }
 
 port, _ := c.Get("port")
@@ -30,7 +34,7 @@ c.Set("port", 9090)
 if err := c.Save(); err != nil { ... }
 ```
 
-The file lives at `<user config dir>/myapp/config.json`; on first run it is created from the template.
+The file lives at `<user config dir>/myapp/config.json`; on first run it is created from the embedded JSON template.
 
 Note: JSON numbers come back as `float64` from `Get`.
 
@@ -50,7 +54,8 @@ Full API documentation is available on [pkg.go.dev](https://pkg.go.dev/github.co
 ├── config_test.go      # Tests
 └── examples/
     └── demo/
-        └── main.go     # Runnable demo
+        ├── default_config.json  # Embedded default config template
+        └── main.go              # Runnable demo
 ```
 
 Single package at module root, zero external dependencies.
@@ -69,7 +74,7 @@ Tests use `t.TempDir()` and override `AppData` / `XDG_CONFIG_HOME` / `HOME` via 
 ## Design Decisions
 
 - **No auto-detection of executable name**: Renaming the binary would silently create a new config file, losing previous settings. Test binaries would also use different config paths. Multiple binaries in the same project often share one config. The caller explicitly provides `appName`.
-- **Re-read after first save**: On first run, `LoadAppConfig` writes the template to disk then reads it back. This ensures numeric types are always `float64` (matching subsequent runs), avoiding subtle type mismatches between first and later launches.
+- **Re-read after first save**: On first run, `LoadAppConfig` writes the embedded JSON defaults to disk then reads it back. This ensures numeric types are always `float64` (matching subsequent runs), avoiding subtle type mismatches between first and later launches.
 - **Atomic save**: `Save()` writes to a temp file in the same directory, calls `Sync()` to flush to disk, then `Rename`s over the target. A crash during save never leaves a half-written config.
 - **Zero dependencies**: Only stdlib (`encoding/json`, `os`, `path/filepath`). Keeps the dependency tree minimal for a utility library.
 

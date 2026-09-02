@@ -32,8 +32,8 @@ func TestSaveLoad(t *testing.T) {
 func TestLoadAppConfigCreatesFromTemplate(t *testing.T) {
 	useTempConfigDir(t)
 
-	tpl := map[string]any{"name": "demo", "port": 8080}
-	c, err := LoadAppConfig("myapp", tpl)
+	defaultJSON := []byte(`{"name": "demo", "port": 8080}`)
+	c, err := LoadAppConfig("myapp", defaultJSON)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestLoadAppConfigCreatesFromTemplate(t *testing.T) {
 	if err := c.Save(); err != nil {
 		t.Fatal(err)
 	}
-	c2, err := LoadAppConfig("myapp", tpl)
+	c2, err := LoadAppConfig("myapp", defaultJSON)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,15 +59,14 @@ func TestLoadAppConfigCreatesFromTemplate(t *testing.T) {
 	}
 }
 
-// 演示上一轮讨论的坑：模板里的 8080 在内存中是 int，但首次运行也走
+// 演示上一轮讨论的坑：模板里的 8080 在 JSON 中是数字，但首次运行也走
 // "写盘→读回"，所以首末两次运行取出的类型一致，都是 float64。
-// 如果首次运行跳过读回，这里第一次就会拿到 int，第二次拿到 float64。
 func TestLoadAppConfigNumbersAreFloat64(t *testing.T) {
 	useTempConfigDir(t)
 
-	tpl := map[string]any{"port": 8080} // 内存里是 int
+	defaultJSON := []byte(`{"port": 8080}`)
 
-	c, err := LoadAppConfig("myapp", tpl)
+	c, err := LoadAppConfig("myapp", defaultJSON)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +78,7 @@ func TestLoadAppConfigNumbersAreFloat64(t *testing.T) {
 		t.Fatalf("first run: port is %T, want float64", port)
 	}
 
-	c2, err := LoadAppConfig("myapp", tpl)
+	c2, err := LoadAppConfig("myapp", defaultJSON)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,21 +91,11 @@ func TestLoadAppConfigNumbersAreFloat64(t *testing.T) {
 	}
 }
 
-// useTempConfigDir 将 os.UserConfigDir 指向一个全新的临时目录，
-// 避免测试触碰真实用户配置。
-func useTempConfigDir(t *testing.T) {
-	t.Helper()
-	dir := t.TempDir()
-	t.Setenv("AppData", dir)         // Windows
-	t.Setenv("XDG_CONFIG_HOME", dir) // Linux
-	t.Setenv("HOME", dir)            // macOS
-}
-
 func TestLoadAppConfigDirPermissions(t *testing.T) {
 	useTempConfigDir(t)
 
-	tpl := map[string]any{"key": "value"}
-	if _, err := LoadAppConfig("permtest", tpl); err != nil {
+	defaultJSON := []byte(`{"key": "value"}`)
+	if _, err := LoadAppConfig("permtest", defaultJSON); err != nil {
 		t.Fatal(err)
 	}
 
@@ -165,4 +154,14 @@ func TestSaveAtomic(t *testing.T) {
 			t.Errorf("leftover temp file found: %s", entry.Name())
 		}
 	}
+}
+
+// useTempConfigDir 将 os.UserConfigDir 指向一个全新的临时目录，
+// 避免测试触碰真实用户配置。
+func useTempConfigDir(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("AppData", dir)         // Windows
+	t.Setenv("XDG_CONFIG_HOME", dir) // Linux
+	t.Setenv("HOME", dir)            // macOS
 }

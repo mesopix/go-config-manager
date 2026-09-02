@@ -2,6 +2,7 @@
 package main
 
 import (
+	_ "embed"
 	"fmt"
 	"log"
 	"os"
@@ -10,6 +11,11 @@ import (
 
 	configmanager "github.com/mesopix/go-config-manager"
 )
+
+// defaultConfigJSON 为嵌入的默认配置模板，首次运行时用于创建配置文件。
+//
+//go:embed default_config.json
+var defaultConfigJSON []byte
 
 // exeName 从 os.Args[0] 风格的路径中返回不带扩展名的可执行文件名
 // （demo.exe -> demo）。
@@ -25,11 +31,9 @@ func exeName(arg0 string) string {
 }
 
 func main() {
-	tpl := map[string]any{"name": "demo", "port": 8080, "debug": true}
-
-	// 总会返回一个配置：首次运行从 tpl 创建，之后从磁盘加载。
+	// 总会返回一个配置：首次运行从嵌入的 JSON 模板创建，之后从磁盘加载。
 	// 配置文件位于用户配置目录下。
-	c, err := configmanager.LoadAppConfig(exeName(os.Args[0]), tpl)
+	c, err := configmanager.LoadAppConfig(exeName(os.Args[0]), defaultConfigJSON)
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -13,10 +13,11 @@ const configDirMode = 0o700
 // configFileMode 为 rw-------：仅属主可读写，防止敏感配置泄露。
 const configFileMode = 0o600
 
-// LoadAppConfig 加载 appName 对应的配置。首次运行时从 template 创建配置文件，
+// LoadAppConfig 加载 appName 对应的配置。首次运行时从 defaultJSON 创建配置文件，
 // 因此除非发生 I/O 或解析错误，否则总会返回一个配置对象。
+// defaultJSON 应为合法的 JSON 对象（如通过 //go:embed 嵌入的模板文件）。
 // 数值会从磁盘读回，所以类型统一为 float64。
-func LoadAppConfig(appName string, template map[string]any) (*Config, error) {
+func LoadAppConfig(appName string, defaultJSON []byte) (*Config, error) {
 	// 获取用户配置目录
 	dir, err := os.UserConfigDir()
 	// 获取失败，返回
@@ -46,12 +47,14 @@ func LoadAppConfig(appName string, template map[string]any) (*Config, error) {
 		return nil, err
 	}
 
-	// 构造配置对象，这时候构造出来的配置对象 c 的 data 字段是空的
-	c = &Config{path: path, data: map[string]any{}}
-	// 将模板中的键值对设置到配置对象中
-	for k, v := range template {
-		c.Set(k, v)
+	// 将默认 JSON 解析为 map
+	var defaults map[string]any
+	if err := json.Unmarshal(defaultJSON, &defaults); err != nil {
+		return nil, err
 	}
+
+	// 构造配置对象并填充默认值
+	c = &Config{path: path, data: defaults}
 
 	// 保存配置到文件
 	if err := c.Save(); err != nil {
