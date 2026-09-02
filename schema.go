@@ -27,14 +27,19 @@ type Schema map[string]FieldDef
 // Validate 按 schema 校验 data 中已存在的字段类型是否匹配。
 // 缺失字段的检查和默认值补全在后续步骤中实现。
 func (s Schema) Validate(data map[string]any) error {
+	// 遍历 schema 每个 key
 	for key, def := range s {
 		val, exists := data[key]
+		// data 里没有这个 key？跳过
 		if !exists {
 			continue // 缺失字段检查留给步骤 4
 		}
+		// 有？调 checkType 验证类型
 		if err := checkType(key, val, def.Type); err != nil {
+			// 不匹配？返回错误
 			return err
 		}
+		// 类型匹配则继续下一个
 	}
 	return nil
 }
