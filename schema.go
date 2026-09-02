@@ -24,6 +24,17 @@ type FieldDef struct {
 // 它有意独立于 Config，使调用方自行掌控 schema 与校验生命周期。
 type Schema map[string]FieldDef
 
+// CheckResult 表示 data 相对于 schema 的校验状态。
+type CheckResult int
+
+const (
+	Valid             CheckResult = iota // 严格符合 schema
+	MissingDefaults                      // 仅缺少带默认值的非必填字段
+	ExtraFields                          // 仅有 schema 未定义的多余字段
+	MissingAndExtra                      // 既缺带默认值的字段，又有多余字段
+	Invalid                              // 必填缺失或类型不匹配
+)
+
 // Validate 按 schema 校验 data：检查必填字段、验证类型，并为缺失的非必填字段补全默认值。
 func (s Schema) Validate(data map[string]any) error {
 	// 遍历 schema 每个 key
