@@ -24,14 +24,13 @@ type FieldDef struct {
 // 它有意独立于 Config，使调用方自行掌控 schema 与校验生命周期。
 type Schema map[string]FieldDef
 
-// Validate checks data against the schema. For each field defined in the
-// schema that exists in data, it verifies the value matches the expected
-// FieldType. Missing fields and default-value filling are handled in later steps.
+// Validate 按 schema 校验 data 中已存在的字段类型是否匹配。
+// 缺失字段的检查和默认值补全在后续步骤中实现。
 func (s Schema) Validate(data map[string]any) error {
 	for key, def := range s {
 		val, exists := data[key]
 		if !exists {
-			continue // missing-field check is step 4
+			continue // 缺失字段检查留给步骤 4
 		}
 		if err := checkType(key, val, def.Type); err != nil {
 			return err
@@ -40,7 +39,7 @@ func (s Schema) Validate(data map[string]any) error {
 	return nil
 }
 
-// checkType verifies that val matches the expected FieldType.
+// checkType 验证 val 是否匹配期望的 FieldType。
 func checkType(key string, val any, expected FieldType) error {
 	switch expected {
 	case TypeString:
