@@ -1,6 +1,9 @@
 package configmanager
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // FieldType 表示配置字段期望的 JSON 类型。
 type FieldType int
@@ -23,6 +26,36 @@ type FieldDef struct {
 // Schema 是以配置键名为索引的字段定义集合。
 // 它有意独立于 Config，使调用方自行掌控 schema 与校验生命周期。
 type Schema map[string]FieldDef
+
+// SchemaMeta 是 schema 文件的元数据部分，由客户端自行填充。
+type SchemaMeta struct {
+	Version string `json:"version"`
+}
+
+// SchemaFile 是 schema.json 的顶层结构，将元数据与字段定义分组。
+type SchemaFile struct {
+	Meta   SchemaMeta            `json:"meta"`
+	Fields map[string]FieldDef   `json:"fields"`
+}
+
+// ParseSchema 从 JSON 字节中解析出 Schema（仅提取 fields 部分）。
+// 客户端可通过返回的 SchemaFile 访问 meta 信息。
+func ParseSchema(data []byte) (Schema, error) {
+	var sf SchemaFile
+	if err := json.Unmarshal(data, &sf); err != nil {
+		return nil, err
+	}
+	return Schema(sf.Fields), nil
+}
+
+// ParseSchemaFile 从 JSON 字节中解析出完整的 SchemaFile（含 meta）。
+func ParseSchemaFile(data []byte) (*SchemaFile, error) {
+	var sf SchemaFile
+	if err := json.Unmarshal(data, &sf); err != nil {
+		return nil, err
+	}
+	return &sf, nil
+}
 
 // CheckResult 表示 data 相对于 schema 的校验状态。
 type CheckResult int
