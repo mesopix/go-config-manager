@@ -1,5 +1,7 @@
 # go-config-manager
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/mesopix/go-config-manager.svg)](https://pkg.go.dev/github.com/mesopix/go-config-manager)
+
 Per-app configuration stored as JSON in the user config directory. Zero dependencies.
 
 ```go
