@@ -1,7 +1,5 @@
 package configmanager
 
-import "fmt"
-
 // FieldType 表示配置字段期望的 JSON 类型。
 type FieldType int
 
@@ -35,54 +33,70 @@ const (
 	Invalid                              // 必填缺失或类型不匹配
 )
 
-// Validate 按 schema 校验 data：检查必填字段、验证类型，并为缺失的非必填字段补全默认值。
-func (s Schema) Validate(data map[string]any) error {
-	// 遍历 schema 每个 key
+// Check 只读检查 data 相对于 schema 的状态，不修改 data。
+func (s Schema) Check(data map[string]any) CheckResult {
+	hasMissing := false
+	hasExtra := false
+
+	// 检查 schema 中定义的每个字段
 	for key, def := range s {
 		val, exists := data[key]
-		// data 里没有这个 key
 		if !exists {
-			// 必填 → 报错
+			// 必填缺失 → 直接 Invalid
 			if def.Required {
-				return fmt.Errorf("field %q: required but missing", key)
+				return Invalid
 			}
-			// 非必填且有默认值 → 补全到 data
+			// 非必填但有默认值 → 记为缺失
 			if def.Default != nil {
-				data[key] = def.Default
+				hasMissing = true
 			}
 			continue
 		}
-		// 有？调 checkType 验证类型
-		if err := checkType(key, val, def.Type); err != nil {
-			return err
+		// 类型不匹配 → 直接 Invalid
+		if !matchType(val, def.Type) {
+			return Invalid
 		}
 	}
-	return nil
+
+	// 检查 data 中是否有 schema 未定义的多余字段
+	for key := range data {
+		if _, defined := s[key]; !defined {
+			hasExtra = true
+			break
+		}
+	}
+
+	// 组合判断
+	if hasMissing && hasExtra {
+		return MissingAndExtra
+	}
+	if hasMissing {
+		return MissingDefaults
+	}
+	if hasExtra {
+		return ExtraFields
+	}
+	return Valid
 }
 
-// checkType 验证 val 是否匹配期望的 FieldType。
-func checkType(key string, val any, expected FieldType) error {
+// matchType 检查 val 是否匹配期望的 FieldType，不产生错误信息。
+func matchType(val any, expected FieldType) bool {
 	switch expected {
 	case TypeString:
-		if _, ok := val.(string); !ok {
-			return fmt.Errorf("field %q: expected string, got %T", key, val)
-		}
+		_, ok := val.(string)
+		return ok
 	case TypeFloat:
-		if _, ok := val.(float64); !ok {
-			return fmt.Errorf("field %q: expected float64, got %T", key, val)
-		}
+		_, ok := val.(float64)
+		return ok
 	case TypeBool:
-		if _, ok := val.(bool); !ok {
-			return fmt.Errorf("field %q: expected bool, got %T", key, val)
-		}
+		_, ok := val.(bool)
+		return ok
 	case TypeArray:
-		if _, ok := val.([]any); !ok {
-			return fmt.Errorf("field %q: expected array, got %T", key, val)
-		}
+		_, ok := val.([]any)
+		return ok
 	case TypeObject:
-		if _, ok := val.(map[string]any); !ok {
-			return fmt.Errorf("field %q: expected object, got %T", key, val)
-		}
+		_, ok := val.(map[string]any)
+		return ok
 	}
-	return nil
+	return false
 }
