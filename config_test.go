@@ -1,7 +1,9 @@
 package configmanager
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -25,16 +27,6 @@ func TestSaveLoad(t *testing.T) {
 	if port, ok := got.Get("port"); !ok || port != float64(8080) { // JSON numbers are float64
 		t.Fatalf("port = %v, %v", port, ok)
 	}
-}
-
-// useTempConfigDir points os.UserConfigDir at a fresh temp dir so tests
-// don't touch the real user config.
-func useTempConfigDir(t *testing.T) {
-	t.Helper()
-	dir := t.TempDir()
-	t.Setenv("AppData", dir)         // Windows
-	t.Setenv("XDG_CONFIG_HOME", dir) // Linux
-	t.Setenv("HOME", dir)            // macOS
 }
 
 func TestLoadAppConfigCreatesFromTemplate(t *testing.T) {
@@ -97,5 +89,61 @@ func TestLoadAppConfigNumbersAreFloat64(t *testing.T) {
 	}
 	if _, isFloat := port.(float64); !isFloat {
 		t.Fatalf("second run: port is %T, want float64", port)
+	}
+}
+
+// useTempConfigDir points os.UserConfigDir at a fresh temp dir so tests
+// don't touch the real user config.
+func useTempConfigDir(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("AppData", dir)         // Windows
+	t.Setenv("XDG_CONFIG_HOME", dir) // Linux
+	t.Setenv("HOME", dir)            // macOS
+}
+
+func TestSaveAtomic(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+
+	c := &Config{path: path, data: map[string]any{}}
+	c.Set("key", "value")
+	if err := c.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify content is correct after atomic save.
+	got, err := load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if val, ok := got.Get("key"); !ok || val != "value" {
+		t.Fatalf("key = %v, %v; want value, true", val, ok)
+	}
+
+	// Verify file permissions are 0644 (mask out umask bits on Unix).
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm&configFileMode != configFileMode {
+		t.Fatalf("permissions = %o, want at least %o", perm, configFileMode)
+	}
+
+	// Save multiple times and verify no leftover temp files.
+	for range 5 {
+		c.Set("counter", float64(1))
+		if err := c.Save(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".config-") && strings.HasSuffix(entry.Name(), ".tmp") {
+			t.Errorf("leftover temp file found: %s", entry.Name())
+		}
 	}
 }

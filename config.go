@@ -76,13 +76,55 @@ func (c *Config) Set(key string, value any) {
 // configFileMode is rw-r--r--: owner reads/writes, others read-only.
 const configFileMode = 0o644
 
-// Save writes the current values back to the JSON file.
+// Save writes the current values back to the JSON file atomically.
+// It writes to a temporary file first, syncs to disk, then renames
+// over the target so a crash never leaves a half-written config.
 func (c *Config) Save() error {
 	b, err := json.MarshalIndent(c.data, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(c.path, b, configFileMode)
+
+	// Create temp file in the same directory as the target
+	// so os.Rename works (must be on the same filesystem).
+	tmpFile, err := os.CreateTemp(filepath.Dir(c.path), ".config-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmpFile.Name()
+
+	// Clean up the temp file if anything below fails.
+	success := false
+	defer func() {
+		if !success {
+			os.Remove(tmpPath)
+		}
+	}()
+
+	if _, err := tmpFile.Write(b); err != nil {
+		tmpFile.Close()
+		return err
+	}
+
+	// Sync ensures data reaches stable storage before rename.
+	if err := tmpFile.Sync(); err != nil {
+		tmpFile.Close()
+		return err
+	}
+	if err := tmpFile.Close(); err != nil {
+		return err
+	}
+
+	if err := os.Chmod(tmpPath, configFileMode); err != nil {
+		return err
+	}
+
+	if err := os.Rename(tmpPath, c.path); err != nil {
+		return err
+	}
+
+	success = true
+	return nil
 }
 
 // load reads the JSON file at path into a new Config.
