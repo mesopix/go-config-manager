@@ -6,16 +6,37 @@
 
 每个版本的 `schema.json` 一旦随程序发布并经过一段时间的生产验证，就必须作为历史快照永久保存在仓库中。这是后续配置文件版本升级的基础依据。
 
-## 目录结构
+## 版本号说明
+
+`schema.json` 中 `meta.version` 是**客户端的业务/schema 版本号**，与库的版本号（Git tag）无关。客户端自行定义和管理此版本号的语义和递增规则。
+
+## schema.json 结构
+
+```json
+{
+  "meta": {
+    "version": "1.0.0"
+  },
+  "fields": {
+    "name": {"Type": 0, "Required": true},
+    "port": {"Type": 1, "Default": 8080}
+  }
+}
+```
+
+- `meta` — 元数据，至少包含 `version`，客户端可自行扩展其他字段
+- `fields` — 字段定义集合，即 `Schema` 的序列化形式
+
+## 历史快照目录结构
 
 ```
 schemas/
-├── v0.3.0.json    # 首个引入 schema 的版本
-├── v0.4.0.json    # 新增字段 / 类型变更
+├── 1.0.0.json     # 客户端首版 schema
+├── 1.1.0.json     # 新增字段 / 类型变更
 └── ...            # 每个有 schema 变更的版本一个文件
 ```
 
-- 文件名格式：`v<major>.<minor>.<patch>.json`，与 Git tag 一一对应
+- 文件名格式：`<客户端schema版本号>.json`
 - 仅在 schema 发生变化的版本创建新文件；无变化则复用上一版本
 - 文件内容是该版本程序编译时嵌入的 `schema.json` 的完整副本
 
