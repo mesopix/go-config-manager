@@ -24,7 +24,7 @@ func TestSaveLoad(t *testing.T) {
 	if name, ok := got.Get("name"); !ok || name != "demo" {
 		t.Fatalf("name = %v, %v", name, ok)
 	}
-	if port, ok := got.Get("port"); !ok || port != float64(8080) { // JSON numbers are float64
+	if port, ok := got.Get("port"); !ok || port != float64(8080) { // JSON 数值是 float64
 		t.Fatalf("port = %v, %v", port, ok)
 	}
 }
@@ -45,7 +45,7 @@ func TestLoadAppConfigCreatesFromTemplate(t *testing.T) {
 		t.Fatalf("port = %v, %v", port, ok)
 	}
 
-	// A second load reads from disk and keeps changes.
+	// 第二次加载从磁盘读取，并保留之前的修改。
 	c.Set("port", 9090)
 	if err := c.Save(); err != nil {
 		t.Fatal(err)
@@ -92,8 +92,8 @@ func TestLoadAppConfigNumbersAreFloat64(t *testing.T) {
 	}
 }
 
-// useTempConfigDir points os.UserConfigDir at a fresh temp dir so tests
-// don't touch the real user config.
+// useTempConfigDir 将 os.UserConfigDir 指向一个全新的临时目录，
+// 避免测试触碰真实用户配置。
 func useTempConfigDir(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
@@ -112,7 +112,7 @@ func TestSaveAtomic(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Verify content is correct after atomic save.
+	// 验证原子保存后内容正确。
 	got, err := load(path)
 	if err != nil {
 		t.Fatal(err)
@@ -121,7 +121,7 @@ func TestSaveAtomic(t *testing.T) {
 		t.Fatalf("key = %v, %v; want value, true", val, ok)
 	}
 
-	// Verify file permissions are 0644 (mask out umask bits on Unix).
+	// 验证文件权限至少为 0644（屏蔽 Unix 上 umask 的影响）。
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
@@ -130,7 +130,7 @@ func TestSaveAtomic(t *testing.T) {
 		t.Fatalf("permissions = %o, want at least %o", perm, configFileMode)
 	}
 
-	// Save multiple times and verify no leftover temp files.
+	// 多次保存并验证没有残留的临时文件。
 	for range 5 {
 		c.Set("counter", float64(1))
 		if err := c.Save(); err != nil {

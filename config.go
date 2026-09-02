@@ -1,4 +1,4 @@
-// Package configmanager is a tiny JSON-file-backed configuration store.
+// 包 configmanager 是一个基于 JSON 文件的轻量级配置存储库。
 package configmanager
 
 import (
@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 )
 
-// LoadAppConfig loads the config for appName. On first run the file is created
-// from template, so a config is always returned unless an I/O or parse
-// error occurs. Values are read back from disk, so numbers are float64.
+// LoadAppConfig 加载 appName 对应的配置。首次运行时从 template 创建配置文件，
+// 因此除非发生 I/O 或解析错误，否则总会返回一个配置对象。
+// 数值会从磁盘读回，所以类型统一为 float64。
 func LoadAppConfig(appName string, template map[string]any) (*Config, error) {
 	// 拼凑配置路径：<用户配置目录>/<appName>/config.json
 	dir, err := os.UserConfigDir()
@@ -35,7 +35,7 @@ func LoadAppConfig(appName string, template map[string]any) (*Config, error) {
 
 	// 代码能走到这里，说明是第一次运行
 	// 首先创建配置目录
-	// configDirMode is rwxr-xr-x: dirs only need to be listable by others.
+	// configDirMode 为 rwxr-xr-x：目录只需对其他人可列出的权限即可。
 	const configDirMode = 0o755
 	if err := os.MkdirAll(filepath.Dir(path), configDirMode); err != nil {
 		return nil, err
@@ -55,45 +55,45 @@ func LoadAppConfig(appName string, template map[string]any) (*Config, error) {
 	return load(path)
 }
 
-// Config holds configuration values backed by a JSON file on disk.
+// Config 持有以磁盘 JSON 文件为后端的配置值。
 type Config struct {
 	path string
 	data map[string]any
 }
 
-// Get returns the value stored under key and whether it exists.
-// JSON numbers unmarshal as float64.
+// Get 返回 key 下存储的值以及它是否存在。
+// JSON 数值会被反序列化为 float64。
 func (c *Config) Get(key string) (any, bool) {
 	v, ok := c.data[key]
 	return v, ok
 }
 
-// Set stores value under key.
+// Set 将 value 存储到 key 下。
 func (c *Config) Set(key string, value any) {
 	c.data[key] = value
 }
 
-// configFileMode is rw-r--r--: owner reads/writes, others read-only.
+// configFileMode 为 rw-r--r--：属主可读写，其他人只读。
 const configFileMode = 0o644
 
-// Save writes the current values back to the JSON file atomically.
-// It writes to a temporary file first, syncs to disk, then renames
-// over the target so a crash never leaves a half-written config.
+// Save 以原子方式把当前值写回 JSON 文件。
+// 先写入临时文件并同步到磁盘，再重命名覆盖目标文件，
+// 这样即使中途崩溃也不会留下写了一半的配置。
 func (c *Config) Save() error {
 	b, err := json.MarshalIndent(c.data, "", "  ")
 	if err != nil {
 		return err
 	}
 
-	// Create temp file in the same directory as the target
-	// so os.Rename works (must be on the same filesystem).
+	// 在与目标文件相同的目录下创建临时文件，
+	// 保证 os.Rename 可用（必须在同一文件系统上）。
 	tmpFile, err := os.CreateTemp(filepath.Dir(c.path), ".config-*.tmp")
 	if err != nil {
 		return err
 	}
 	tmpPath := tmpFile.Name()
 
-	// Clean up the temp file if anything below fails.
+	// 后续任何步骤失败时清理临时文件。
 	success := false
 	defer func() {
 		if !success {
@@ -106,7 +106,7 @@ func (c *Config) Save() error {
 		return err
 	}
 
-	// Sync ensures data reaches stable storage before rename.
+	// Sync 确保数据在 rename 之前落盘。
 	if err := tmpFile.Sync(); err != nil {
 		tmpFile.Close()
 		return err
@@ -127,8 +127,8 @@ func (c *Config) Save() error {
 	return nil
 }
 
-// load reads the JSON file at path into a new Config.
-// A missing file is an error.
+// load 读取 path 处的 JSON 文件到一个新的 Config 中。
+// 文件不存在视为错误。
 func load(path string) (*Config, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
