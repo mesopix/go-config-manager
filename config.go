@@ -257,6 +257,33 @@ func (c *Config) SetFieldsFrom(source any) error {
 	return nil
 }
 
+// ---------- Check / Normalize 接入 Config ----------
+
+// Check 用 schema 校验当前 fields 层，返回校验状态。
+// 等价于在 fields() 上调用 Schema.Check，但无需手动提取 map。
+func (c *Config) Check(schema Schema) CheckResult {
+	return schema.Check(c.fields())
+}
+
+// Normalize 按 schema 规范化当前 fields 层：补全缺失的默认值、删除多余字段。
+// Valid 状态下为 no-op（直接返回 nil）；MissingDefaults / ExtraFields /
+// MissingAndExtra 状态下执行规范化并写回；Invalid 状态返回错误。
+func (c *Config) Normalize(schema Schema) error {
+	switch c.Check(schema) {
+	case Valid:
+		return nil
+	case MissingDefaults, ExtraFields, MissingAndExtra:
+		normalized, err := schema.Normalize(c.fields())
+		if err != nil {
+			return err
+		}
+		c.data["fields"] = normalized
+		return nil
+	default:
+		return fmt.Errorf("cannot normalize: check result is Invalid")
+	}
+}
+
 // load 读取 path 处的 JSON 文件到一个新的 Config 中。
 // 文件不存在视为错误。加载后自动提取 declaredVersion。
 func load(path string) (*Config, error) {

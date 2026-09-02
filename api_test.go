@@ -463,3 +463,122 @@ func TestStructBinding_setFieldsFromRejectsInvalid(t *testing.T) {
 		t.Error("SetFieldsFrom(slice): expected error, got nil")
 	}
 }
+
+// ---------- Config.Check / Config.Normalize 接入 ----------
+
+// Config.Check 直接作用于 fields 层，无需手动提取 map。
+func TestConfig_checkDirectlyOnFields(t *testing.T) {
+	useTempConfigDir(t)
+
+	defaultJSON := []byte(`{"meta": {}, "fields": {"host": "localhost", "port": 8080}}`)
+	c, err := configmanager.LoadAppConfig("cfgcheck", defaultJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	schema := configmanager.Schema{
+		"host": {Type: configmanager.TypeString, Required: true},
+		"port": {Type: configmanager.TypeFloat, Required: true},
+	}
+	if got := c.Check(schema); got != configmanager.Valid {
+		t.Errorf("Check = %d, want Valid", got)
+	}
+}
+
+// Config.Normalize 在 Valid 状态下为 no-op，不报错。
+func TestConfig_normalizeValidIsNoop(t *testing.T) {
+	useTempConfigDir(t)
+
+	defaultJSON := []byte(`{"meta": {}, "fields": {"key": "value"}}`)
+	c, err := configmanager.LoadAppConfig("noopnorm", defaultJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	schema := configmanager.Schema{
+		"key": {Type: configmanager.TypeString, Required: true},
+	}
+	if err := c.Normalize(schema); err != nil {
+		t.Fatalf("Normalize on Valid data: unexpected error: %v", err)
+	}
+	if val, ok := c.Get("key"); !ok || val != "value" {
+		t.Errorf("key after noop normalize = %v, %v; want value, true", val, ok)
+	}
+}
+
+// Config.Normalize 补全缺失默认值并写回 fields 层。
+func TestConfig_normalizeFillsDefaultsAndWritesBack(t *testing.T) {
+	useTempConfigDir(t)
+
+	defaultJSON := []byte(`{"meta": {}, "fields": {"host": "localhost"}}`)
+	c, err := configmanager.LoadAppConfig("normfill", defaultJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	schema := configmanager.Schema{
+		"host": {Type: configmanager.TypeString, Required: true},
+		"port": {Type: configmanager.TypeFloat, Default: float64(3000)},
+	}
+	if got := c.Check(schema); got != configmanager.MissingDefaults {
+		t.Fatalf("before normalize: Check = %d, want MissingDefaults", got)
+	}
+	if err := c.Normalize(schema); err != nil {
+		t.Fatalf("Normalize: %v", err)
+	}
+	if port, ok := c.Get("port"); !ok || port != float64(3000) {
+		t.Errorf("port after normalize = %v, %v; want 3000, true", port, ok)
+	}
+}
+
+// Config.Normalize 删除多余字段。
+func TestConfig_normalizeRemovesExtraFields(t *testing.T) {
+	useTempConfigDir(t)
+
+	defaultJSON := []byte(`{"meta": {}, "fields": {"host": "localhost", "extra": "junk"}}`)
+	c, err := configmanager.LoadAppConfig("normextra", defaultJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	schema := configmanager.Schema{
+		"host": {Type: configmanager.TypeString, Required: true},
+	}
+	if got := c.Check(schema); got != configmanager.ExtraFields {
+		t.Fatalf("before normalize: Check = %d, want ExtraFields", got)
+	}
+	if err := c.Normalize(schema); err != nil {
+		t.Fatalf("Normalize: %v", err)
+	}
+	if _, ok := c.Get("extra"); ok {
+		t.Error("extra field should be removed after normalize")
+	}
+	if host, ok := c.Get("host"); !ok || host != "localhost" {
+		t.Errorf("host = %v, %v; want localhost, true", host, ok)
+	}
+}
+
+// Config.Normalize 在 Invalid 状态下返回错误，不修改 fields。
+func TestConfig_normalizeInvalidReturnsError(t *testing.T) {
+	useTempConfigDir(t)
+
+	defaultJSON := []byte(`{"meta": {}, "fields": {"port": "not-a-number"}}`)
+	c, err := configmanager.LoadAppConfig("norminvalid", defaultJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	schema := configmanager.Schema{
+		"port": {Type: configmanager.TypeFloat, Required: true},
+	}
+	if got := c.Check(schema); got != configmanager.Invalid {
+		t.Fatalf("before normalize: Check = %d, want Invalid", got)
+	}
+	if err := c.Normalize(schema); err == nil {
+		t.Fatal("Normalize on Invalid data: expected error, got nil")
+	}
+	// fields 未被改动
+	if val, ok := c.Get("port"); !ok || val != "not-a-number" {
+		t.Errorf("port after failed normalize = %v, %v; want not-a-number, true", val, ok)
+	}
+}
