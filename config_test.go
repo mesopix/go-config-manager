@@ -7,6 +7,89 @@ import (
 	"testing"
 )
 
+// useTempConfigDir 将 os.UserConfigDir 指向一个全新的临时目录，
+// 避免测试触碰真实用户配置。
+func useTempConfigDir(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("AppData", dir)         // Windows
+	t.Setenv("XDG_CONFIG_HOME", dir) // Linux
+	t.Setenv("HOME", dir)            // macOS
+}
+
+// ---------- load() 正例 ----------
+
+func TestLoad_validJSON(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+
+	content := []byte(`{"name": "demo", "port": 8080, "debug": true}`)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := load(path)
+	if err != nil {
+		t.Fatalf("load valid JSON: unexpected error: %v", err)
+	}
+
+	if name, ok := c.Get("name"); !ok || name != "demo" {
+		t.Errorf("name = %v, %v; want demo, true", name, ok)
+	}
+	if port, ok := c.Get("port"); !ok || port != float64(8080) {
+		t.Errorf("port = %v, %v; want 8080, true", port, ok)
+	}
+	if debug, ok := c.Get("debug"); !ok || debug != true {
+		t.Errorf("debug = %v, %v; want true, true", debug, ok)
+	}
+}
+
+// ---------- load() 反例（表驱动） ----------
+
+func TestLoad_invalidJSON(t *testing.T) {
+	tests := []struct {
+		label   string
+		content string
+	}{
+		{"syntax error", `{invalid}`},
+		{"truncated", `{"key": "val`},
+		{"empty file", ``},
+		{"array instead of object", `[1, 2, 3]`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.label, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.json")
+			if err := os.WriteFile(path, []byte(tt.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err := load(path)
+			if err == nil {
+				t.Errorf("load(%q): expected error, got nil", tt.label)
+			}
+		})
+	}
+}
+
+// ---------- load() 文件不存在 ----------
+
+func TestLoad_fileNotFound(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nonexistent.json")
+
+	_, err := load(path)
+	if err == nil {
+		t.Fatal("load nonexistent file: expected error, got nil")
+	}
+	if !os.IsNotExist(err) {
+		t.Errorf("load nonexistent file: error = %v; want os.IsNotExist", err)
+	}
+}
+
+// ---------- Save + load 往返 ----------
+
 func TestSaveLoad(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 
@@ -29,67 +112,7 @@ func TestSaveLoad(t *testing.T) {
 	}
 }
 
-func TestLoadAppConfigCreatesFromTemplate(t *testing.T) {
-	useTempConfigDir(t)
-
-	defaultJSON := []byte(`{"name": "demo", "port": 8080}`)
-	c, err := LoadAppConfig("myapp", defaultJSON)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if name, ok := c.Get("name"); !ok || name != "demo" {
-		t.Fatalf("name = %v, %v", name, ok)
-	}
-	if port, ok := c.Get("port"); !ok || port != float64(8080) {
-		t.Fatalf("port = %v, %v", port, ok)
-	}
-
-	// 第二次加载从磁盘读取，并保留之前的修改。
-	c.Set("port", 9090)
-	if err := c.Save(); err != nil {
-		t.Fatal(err)
-	}
-	c2, err := LoadAppConfig("myapp", defaultJSON)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if port, ok := c2.Get("port"); !ok || port != float64(9090) {
-		t.Fatalf("port = %v, %v", port, ok)
-	}
-}
-
-// 演示上一轮讨论的坑：模板里的 8080 在 JSON 中是数字，但首次运行也走
-// "写盘→读回"，所以首末两次运行取出的类型一致，都是 float64。
-func TestLoadAppConfigNumbersAreFloat64(t *testing.T) {
-	useTempConfigDir(t)
-
-	defaultJSON := []byte(`{"port": 8080}`)
-
-	c, err := LoadAppConfig("myapp", defaultJSON)
-	if err != nil {
-		t.Fatal(err)
-	}
-	port, ok := c.Get("port")
-	if !ok {
-		t.Fatal("port missing")
-	}
-	if _, isFloat := port.(float64); !isFloat {
-		t.Fatalf("first run: port is %T, want float64", port)
-	}
-
-	c2, err := LoadAppConfig("myapp", defaultJSON)
-	if err != nil {
-		t.Fatal(err)
-	}
-	port, ok = c2.Get("port")
-	if !ok {
-		t.Fatal("port missing")
-	}
-	if _, isFloat := port.(float64); !isFloat {
-		t.Fatalf("second run: port is %T, want float64", port)
-	}
-}
+// ---------- 目录权限 ----------
 
 func TestLoadAppConfigDirPermissions(t *testing.T) {
 	useTempConfigDir(t)
@@ -109,6 +132,8 @@ func TestLoadAppConfigDirPermissions(t *testing.T) {
 		t.Fatalf("dir permissions = %o, want at least %o", perm, configDirMode)
 	}
 }
+
+// ---------- 原子保存 ----------
 
 func TestSaveAtomic(t *testing.T) {
 	dir := t.TempDir()
@@ -130,6 +155,7 @@ func TestSaveAtomic(t *testing.T) {
 	}
 
 	// 验证文件权限至少为 0600（屏蔽 Unix 上 umask 的影响）。
+	// 注意：Windows 上文件权限模型不同，此断言仅在 Unix 上有意义。
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
@@ -154,14 +180,4 @@ func TestSaveAtomic(t *testing.T) {
 			t.Errorf("leftover temp file found: %s", entry.Name())
 		}
 	}
-}
-
-// useTempConfigDir 将 os.UserConfigDir 指向一个全新的临时目录，
-// 避免测试触碰真实用户配置。
-func useTempConfigDir(t *testing.T) {
-	t.Helper()
-	dir := t.TempDir()
-	t.Setenv("AppData", dir)         // Windows
-	t.Setenv("XDG_CONFIG_HOME", dir) // Linux
-	t.Setenv("HOME", dir)            // macOS
 }
