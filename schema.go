@@ -1,5 +1,7 @@
 package configmanager
 
+import "maps"
+
 // FieldType 表示配置字段期望的 JSON 类型。
 type FieldType int
 
@@ -99,4 +101,19 @@ func matchType(val any, expected FieldType) bool {
 		return ok
 	}
 	return false
+}
+
+// Normalize 返回 data 的副本，并为缺失的非必填字段补全默认值。
+// 原 data 不会被修改。多余字段保留在结果中。
+func (s Schema) Normalize(data map[string]any) map[string]any {
+	result := make(map[string]any, len(data))
+	// 复制原始数据
+	maps.Copy(result, data)
+	// 补全缺失的默认值
+	for key, def := range s {
+		if _, exists := result[key]; !exists && def.Default != nil {
+			result[key] = def.Default
+		}
+	}
+	return result
 }
