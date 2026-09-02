@@ -1,6 +1,10 @@
 package configmanager_test
 
 import (
+	"bytes"
+	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	configmanager "github.com/mesopix/go-config-manager"
@@ -272,5 +276,70 @@ func TestSchema_normalizeAndSaveBack(t *testing.T) {
 	}
 	if port, ok := c2.Get("port"); !ok || port != float64(3000) {
 		t.Errorf("port after normalize+save = %v, %v; want 3000, true", port, ok)
+	}
+}
+
+// ---------- 坏文件：专用错误类型 ----------
+
+// 已存在的配置文件损坏时，LoadAppConfig 应返回 nil 和 CorruptConfigError，
+// 不提供默认值降级，且不覆盖磁盘上的坏文件。
+func TestLoadAppConfig_corruptFileReturnsTypedError(t *testing.T) {
+	useTempConfigDir(t)
+
+	defaultJSON := []byte(`{"meta": {"version": "1"}, "fields": {"color": "red"}}`)
+
+	// 先正常创建配置文件
+	if _, err := configmanager.LoadAppConfig("corruptapp", defaultJSON); err != nil {
+		t.Fatal(err)
+	}
+
+	// 手动把配置文件改坏
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "corruptapp", "config.json")
+	corrupted := []byte(`{invalid json`)
+	if err := os.WriteFile(path, corrupted, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// 应返回错误和 nil 配置，杜绝调用方拿默认值静默继续
+	c, err := configmanager.LoadAppConfig("corruptapp", defaultJSON)
+	if err == nil {
+		t.Fatal("LoadAppConfig with corrupt file: expected error, got nil")
+	}
+	if c != nil {
+		t.Errorf("LoadAppConfig with corrupt file: expected nil Config, got %v", c)
+	}
+
+	// 错误可通过 errors.As 识别为 CorruptConfigError，且携带正确路径
+	var corruptErr *configmanager.CorruptConfigError
+	if !errors.As(err, &corruptErr) {
+		t.Fatalf("error type = %T, want *CorruptConfigError", err)
+	}
+	if corruptErr.Path != path {
+		t.Errorf("Path = %q, want %q", corruptErr.Path, path)
+	}
+
+	// 磁盘上的坏文件不能被覆盖
+	onDisk, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(onDisk, corrupted) {
+		t.Errorf("corrupt file was modified: got %q", onDisk)
+	}
+}
+
+// ---------- 修复接口：预留未实现 ----------
+
+// RepairAppConfig 是预留接口，当前阶段固定返回未实现错误。
+func TestRepairAppConfig_notImplementedYet(t *testing.T) {
+	useTempConfigDir(t)
+
+	err := configmanager.RepairAppConfig("anyapp", []byte(`{"meta": {}, "fields": {}}`))
+	if err == nil {
+		t.Fatal("RepairAppConfig: expected error, got nil")
 	}
 }

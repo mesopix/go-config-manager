@@ -3,6 +3,8 @@ package configmanager
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -14,7 +16,9 @@ const configDirMode = 0o700
 const configFileMode = 0o600
 
 // LoadAppConfig 加载 appName 对应的配置。首次运行时从 defaultJSON 创建配置文件，
-// 因此除非发生 I/O 或解析错误，否则总会返回一个配置对象。
+// 因此除非无法获取用户配置目录或 defaultJSON 本身非法，否则总会返回一个配置对象。
+// 已存在的配置文件无法读取或解析时，返回 nil 和 *CorruptConfigError，
+// 不提供默认值降级，也不覆盖磁盘上的坏文件。
 // defaultJSON 应为合法的 JSON 对象（如通过 //go:embed 嵌入的模板文件）。
 // 数值会从磁盘读回，所以类型统一为 float64。
 func LoadAppConfig(appName string, defaultJSON []byte) (*Config, error) {
@@ -29,16 +33,18 @@ func LoadAppConfig(appName string, defaultJSON []byte) (*Config, error) {
 	path := filepath.Join(dir, appName, "config.json")
 
 	// 直接尝试加载
-	c, err := load(path)
+	loaded, err := load(path)
 
 	// 如果加载成功，就直接返回配置对象
 	if err == nil {
-		return c, nil
+		return loaded, nil
 	}
 
-	// 如果不是文件不存在的错误，就返回错误（因为文件不存在不算错误，只是需要本函数后面的逻辑做初始化创建）
+	// 文件存在但无法读取或解析：返回专用错误类型。
+	// 不提供默认值降级，杜绝调用方拿默认值静默继续；
+	// 不覆盖磁盘上的坏文件，留给 RepairAppConfig 或人工处置。
 	if !os.IsNotExist(err) {
-		return nil, err
+		return nil, &CorruptConfigError{Path: path, Err: err}
 	}
 
 	// 代码能走到这里，说明是第一次运行
@@ -47,23 +53,57 @@ func LoadAppConfig(appName string, defaultJSON []byte) (*Config, error) {
 		return nil, err
 	}
 
-	// 将默认 JSON 解析为 map
-	var defaults map[string]any
-	if err := json.Unmarshal(defaultJSON, &defaults); err != nil {
+	// 解析默认 JSON 并构造配置对象
+	created, err := newConfigFromDefaults(path, defaultJSON)
+	if err != nil {
 		return nil, err
 	}
 
-	// 构造配置对象并填充默认值
-	c = &Config{path: path, data: defaults, resolvedVersion: UnknownVersion}
-	c.declaredVersion = extractVersion(defaults)
-
 	// 保存配置到文件
-	if err := c.Save(); err != nil {
+	if err := created.Save(); err != nil {
 		return nil, err
 	}
 
 	// 从磁盘重读配置文件
 	return load(path)
+}
+
+// newConfigFromDefaults 解析 defaultJSON 并构造 Config，不读写磁盘。
+// defaultJSON 解析失败时返回 nil 和错误。
+func newConfigFromDefaults(path string, defaultJSON []byte) (*Config, error) {
+	var defaults map[string]any
+	if err := json.Unmarshal(defaultJSON, &defaults); err != nil {
+		return nil, err
+	}
+	config := &Config{path: path, data: defaults, resolvedVersion: UnknownVersion}
+	config.declaredVersion = extractVersion(defaults)
+	return config, nil
+}
+
+// CorruptConfigError 表示已存在的配置文件无法读取或解析。
+// 调用方应用 errors.As 识别本错误，向用户报错并退出，不得静默改用默认值。
+type CorruptConfigError struct {
+	Path string // 配置文件的绝对路径
+	Err  error  // 原始读取或解析错误
+}
+
+// Error 实现 error 接口，信息携带配置文件路径与原始错误。
+func (e *CorruptConfigError) Error() string {
+	return fmt.Sprintf("config file %s is corrupt or unreadable: %v", e.Path, e.Err)
+}
+
+// Unwrap 返回原始错误，支持 errors.Is/As 链式判断。
+func (e *CorruptConfigError) Unwrap() error {
+	return e.Err
+}
+
+// errRepairNotImplemented 是预留修复接口的占位错误。
+var errRepairNotImplemented = errors.New("config repair is not implemented yet")
+
+// RepairAppConfig 修复 appName 对应的损坏配置文件。预留接口，尚未实现；
+// 未来版本将基于 defaultJSON 重建配置文件或引导用户修复。
+func RepairAppConfig(appName string, defaultJSON []byte) error {
+	return errRepairNotImplemented
 }
 
 // UnknownVersion 表示无法识别的数据版本号。
