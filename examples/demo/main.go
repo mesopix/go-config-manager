@@ -3,7 +3,6 @@ package main
 
 import (
 	_ "embed"
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -49,11 +48,13 @@ func main() {
 	debug, _ := c.Get("debug")
 	fmt.Printf("name=%v port=%v debug=%v\n", name, port, debug)
 
-	// 从嵌入的 JSON 反序列化 schema
-	var schema configmanager.Schema
-	if err := json.Unmarshal(embeddedSchemaJSON, &schema); err != nil {
+	// 从嵌入的 JSON 解析 schema（含 meta）
+	sf, err := configmanager.ParseSchemaFile(embeddedSchemaJSON)
+	if err != nil {
 		log.Fatalf("parse embedded schema: %v", err)
 	}
+	schema := configmanager.Schema(sf.Fields)
+	fmt.Printf("schema version: %s\n", sf.Meta.Version)
 
 	// 提取当前配置数据用于检查
 	data := map[string]any{}

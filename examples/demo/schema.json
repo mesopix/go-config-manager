@@ -1,5 +1,10 @@
 {
-  "name": {"Type": 0, "Required": true},
-  "port": {"Type": 1, "Required": false, "Default": 8080},
-  "debug": {"Type": 2, "Required": false, "Default": false}
+  "meta": {
+    "version": "0.3.0"
+  },
+  "fields": {
+    "name": {"Type": 0, "Required": true},
+    "port": {"Type": 1, "Required": false, "Default": 8080},
+    "debug": {"Type": 2, "Required": false, "Default": false}
+  }
 }
