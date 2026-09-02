@@ -24,19 +24,22 @@ type FieldDef struct {
 // 它有意独立于 Config，使调用方自行掌控 schema 与校验生命周期。
 type Schema map[string]FieldDef
 
-// Validate 按 schema 校验 data：检查必填字段是否存在，并验证已有字段的类型。
-// 缺失且有默认值的字段会在后续步骤中补全。
+// Validate 按 schema 校验 data：检查必填字段、验证类型，并为缺失的非必填字段补全默认值。
 func (s Schema) Validate(data map[string]any) error {
 	// 遍历 schema 每个 key
 	for key, def := range s {
 		val, exists := data[key]
 		// data 里没有这个 key
 		if !exists {
-			// 必填且无默认值 → 报错
+			// 必填 → 报错
 			if def.Required {
 				return fmt.Errorf("field %q: required but missing", key)
 			}
-			continue // 非必填的缺失字段暂时跳过，默认值补全留给步骤 5
+			// 非必填且有默认值 → 补全到 data
+			if def.Default != nil {
+				data[key] = def.Default
+			}
+			continue
 		}
 		// 有？调 checkType 验证类型
 		if err := checkType(key, val, def.Type); err != nil {
