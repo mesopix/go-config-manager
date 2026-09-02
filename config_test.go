@@ -102,6 +102,25 @@ func useTempConfigDir(t *testing.T) {
 	t.Setenv("HOME", dir)            // macOS
 }
 
+func TestLoadAppConfigDirPermissions(t *testing.T) {
+	useTempConfigDir(t)
+
+	tpl := map[string]any{"key": "value"}
+	if _, err := LoadAppConfig("permtest", tpl); err != nil {
+		t.Fatal(err)
+	}
+
+	// 验证配置目录权限至少为 0700。
+	dir := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "permtest")
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm&configDirMode != configDirMode {
+		t.Fatalf("dir permissions = %o, want at least %o", perm, configDirMode)
+	}
+}
+
 func TestSaveAtomic(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
@@ -121,7 +140,7 @@ func TestSaveAtomic(t *testing.T) {
 		t.Fatalf("key = %v, %v; want value, true", val, ok)
 	}
 
-	// 验证文件权限至少为 0644（屏蔽 Unix 上 umask 的影响）。
+	// 验证文件权限至少为 0600（屏蔽 Unix 上 umask 的影响）。
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)

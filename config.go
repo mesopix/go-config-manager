@@ -7,17 +7,24 @@ import (
 	"path/filepath"
 )
 
+// configDirMode 为 rwx------：仅属主可访问配置目录。
+const configDirMode = 0o700
+
+// configFileMode 为 rw-------：仅属主可读写，防止敏感配置泄露。
+const configFileMode = 0o600
+
 // LoadAppConfig 加载 appName 对应的配置。首次运行时从 template 创建配置文件，
 // 因此除非发生 I/O 或解析错误，否则总会返回一个配置对象。
 // 数值会从磁盘读回，所以类型统一为 float64。
 func LoadAppConfig(appName string, template map[string]any) (*Config, error) {
-	// 拼凑配置路径：<用户配置目录>/<appName>/config.json
+	// 获取用户配置目录
 	dir, err := os.UserConfigDir()
-
-	// 如果拼凑路径失败
+	// 获取失败，返回
 	if err != nil {
 		return nil, err
 	}
+
+	// 拼凑配置路径：<用户配置目录>/<appName>/config.json
 	path := filepath.Join(dir, appName, "config.json")
 
 	// 直接尝试加载
@@ -35,8 +42,6 @@ func LoadAppConfig(appName string, template map[string]any) (*Config, error) {
 
 	// 代码能走到这里，说明是第一次运行
 	// 首先创建配置目录
-	// configDirMode 为 rwxr-xr-x：目录只需对其他人可列出的权限即可。
-	const configDirMode = 0o755
 	if err := os.MkdirAll(filepath.Dir(path), configDirMode); err != nil {
 		return nil, err
 	}
@@ -52,6 +57,8 @@ func LoadAppConfig(appName string, template map[string]any) (*Config, error) {
 	if err := c.Save(); err != nil {
 		return nil, err
 	}
+
+	// 从磁盘重读配置文件
 	return load(path)
 }
 
@@ -72,9 +79,6 @@ func (c *Config) Get(key string) (any, bool) {
 func (c *Config) Set(key string, value any) {
 	c.data[key] = value
 }
-
-// configFileMode 为 rw-r--r--：属主可读写，其他人只读。
-const configFileMode = 0o644
 
 // Save 以原子方式把当前值写回 JSON 文件。
 // 先写入临时文件并同步到磁盘，再重命名覆盖目标文件，
