@@ -59,6 +59,14 @@ func checkType(key string, val any, expected FieldType) error {
 		if _, ok := val.(bool); !ok {
 			return fmt.Errorf("field %q: expected bool, got %T", key, val)
 		}
+	case TypeArray:
+		if _, ok := val.([]any); !ok {
+			return fmt.Errorf("field %q: expected array, got %T", key, val)
+		}
+	case TypeObject:
+		if _, ok := val.(map[string]any); !ok {
+			return fmt.Errorf("field %q: expected object, got %T", key, val)
+		}
 	}
 	return nil
 }
