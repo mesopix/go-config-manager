@@ -30,13 +30,14 @@ No Makefile, no linter config, no formatter config. Only stdlib dependencies (`e
 
 **Three source files at module root:**
 
-- `config.go` — Core library: `LoadAppConfig()`, `Config` struct, `Get()`, `Set()`, `Save()`, internal `load()`
-- `schema.go` — Type definitions only: `FieldType` enum, `FieldDef` struct, `Schema` map type (not yet wired into validation logic)
+- `config.go` — Core library: `LoadAppConfig()`, `Config` struct, `Get()`/`Set()`/`Save()`, `DecodeFields()`/`SetFieldsFrom()` (struct binding), `Check()`/`Normalize()` (schema integration), `Path()`, `CorruptConfigError`, `RepairAppConfig()` (stub)
+- `schema.go` — Schema types (`FieldType`, `FieldDef`, `Schema`, `SchemaFile`), standalone `Check()` and `Normalize()` on raw maps
 - `examples/demo/` — Runnable demo showing embed + LoadAppConfig usage pattern
 
 **Key design contracts:**
 
 - **First-run re-read**: `LoadAppConfig` writes defaults to disk then reads back, ensuring numeric types are always `float64` on both first and subsequent runs. This is intentional — do not "optimize" away the re-read.
+- **Corrupt files fail loudly**: When an existing config file cannot be read or parsed, `LoadAppConfig` returns `nil` and `*CorruptConfigError`. It does NOT fall back to defaults — callers must surface the error. The bad file is never overwritten; `RepairAppConfig` is a reserved stub for future repair workflows.
 - **Atomic save**: `Save()` uses temp-file → `Sync()` → `Rename` pattern. Never replace with direct `os.WriteFile`.
 - **Explicit appName**: The library never auto-detects executable name. Callers must provide it. This prevents config loss on binary rename.
 - **File permissions**: Directories created with `0700`, files with `0600`. These constants (`configDirMode`, `configFileMode`) are unexported.

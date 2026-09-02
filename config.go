@@ -118,6 +118,11 @@ type Config struct {
 	resolvedVersion string // 经 schema 校验后确定的实际版本
 }
 
+// Path 返回配置文件的绝对路径。
+func (c *Config) Path() string {
+	return c.path
+}
+
 // DeclaredVersion 返回 config.json 中声明的数据版本号。
 // 无法识别时返回 UnknownVersion。
 func (c *Config) DeclaredVersion() string {
