@@ -199,14 +199,14 @@ func load(path string) (*Config, error) {
 	return c, nil
 }
 
-// extractVersion 从 {meta: {schema_version: "..."}} 中提取版本号。
+// extractVersion 从 {meta: {version: "..."}} 中提取版本号。
 // 任何缺失或类型不匹配均返回 UnknownVersion。
 func extractVersion(data map[string]any) string {
 	meta, ok := data["meta"].(map[string]any)
 	if !ok {
 		return UnknownVersion
 	}
-	v, ok := meta["schema_version"].(string)
+	v, ok := meta["version"].(string)
 	if !ok || v == "" {
 		return UnknownVersion
 	}

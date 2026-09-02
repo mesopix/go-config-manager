@@ -23,7 +23,7 @@ func TestLoad_validJSON(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
 
-	content := []byte(`{"meta": {"schema_version": "1.0.0"}, "fields": {"name": "demo", "port": 8080, "debug": true}}`)
+	content := []byte(`{"meta": {"version": "1.0.0"}, "fields": {"name": "demo", "port": 8080, "debug": true}}`)
 	if err := os.WriteFile(path, content, 0o600); err != nil {
 		t.Fatal(err)
 	}
