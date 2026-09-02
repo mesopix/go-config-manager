@@ -1,6 +1,6 @@
 package configmanager
 
-import "maps"
+import "fmt"
 
 // FieldType 表示配置字段期望的 JSON 类型。
 type FieldType int
@@ -103,17 +103,29 @@ func matchType(val any, expected FieldType) bool {
 	return false
 }
 
-// Normalize 返回 data 的副本，并为缺失的非必填字段补全默认值。
-// 原 data 不会被修改。多余字段保留在结果中。
-func (s Schema) Normalize(data map[string]any) map[string]any {
-	result := make(map[string]any, len(data))
-	// 复制原始数据
-	maps.Copy(result, data)
+// Normalize 返回 data 的规范化副本：补全缺失的默认值，删除多余字段。
+// 原 data 不会被修改。仅当 Check 结果为 MissingDefaults / ExtraFields /
+// MissingAndExtra 时才能成功转换；其他状态返回 error。
+func (s Schema) Normalize(data map[string]any) (map[string]any, error) {
+	switch s.Check(data) {
+	case MissingDefaults, ExtraFields, MissingAndExtra:
+		// 可转换，继续处理
+	default:
+		return nil, fmt.Errorf("cannot normalize: check result is %d", s.Check(data))
+	}
+
+	result := make(map[string]any, len(s))
+	// 只复制 schema 中定义的字段（自动排除多余字段）
+	for key := range s {
+		if val, exists := data[key]; exists {
+			result[key] = val
+		}
+	}
 	// 补全缺失的默认值
 	for key, def := range s {
 		if _, exists := result[key]; !exists && def.Default != nil {
 			result[key] = def.Default
 		}
 	}
-	return result
+	return result, nil
 }
