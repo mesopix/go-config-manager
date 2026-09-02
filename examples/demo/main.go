@@ -43,6 +43,42 @@ func main() {
 	debug, _ := c.Get("debug")
 	fmt.Printf("name=%v port=%v debug=%v\n", name, port, debug)
 
+	// 定义 schema 并检查配置状态
+	schema := configmanager.Schema{
+		"name":  {Type: configmanager.TypeString, Required: true},
+		"port":  {Type: configmanager.TypeFloat, Required: false, Default: float64(8080)},
+		"debug": {Type: configmanager.TypeBool, Required: false, Default: false},
+	}
+
+	// 提取当前配置数据用于检查
+	data := map[string]any{}
+	for _, key := range []string{"name", "port", "debug"} {
+		if v, ok := c.Get(key); ok {
+			data[key] = v
+		}
+	}
+
+	result := schema.Check(data)
+	fmt.Printf("check result: %d\n", result)
+
+	// 如果可校正，则 Normalize 并写回磁盘
+	switch result {
+	case configmanager.MissingDefaults, configmanager.ExtraFields, configmanager.MissingAndExtra:
+		normalized, err := schema.Normalize(data)
+		if err != nil {
+			log.Fatal(err)
+		}
+		for k, v := range normalized {
+			c.Set(k, v)
+		}
+		if err := c.Save(); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Println("normalized and saved")
+	default:
+		fmt.Println("no normalization needed or cannot normalize")
+	}
+
 	// 修改某个值并保存回磁盘。
 	c.Set("port", 9090)
 	if err := c.Save(); err != nil {
