@@ -343,3 +343,123 @@ func TestRepairAppConfig_notImplementedYet(t *testing.T) {
 		t.Fatal("RepairAppConfig: expected error, got nil")
 	}
 }
+
+// ---------- 结构体绑定：DecodeFields / SetFieldsFrom ----------
+
+type sampleSettings struct {
+	Name    string            `json:"name"`
+	Port    float64           `json:"port"`
+	Debug   bool              `json:"debug,omitempty"`
+	Tags    []string          `json:"tags,omitempty"`
+	Meta    map[string]any    `json:"meta,omitempty"`
+	Optional *string         `json:"optional,omitempty"`
+}
+
+// DecodeFields 往返一致：写入 → 读回字段值相同。
+func TestStructBinding_roundTrip(t *testing.T) {
+	useTempConfigDir(t)
+
+	defaultJSON := []byte(`{"meta": {}, "fields": {"name": "demo", "port": 8080}}`)
+	c, err := configmanager.LoadAppConfig("binding", defaultJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	in := sampleSettings{
+		Name:  "changed",
+		Port:  9090,
+		Debug: true,
+		Tags:  []string{"a", "b"},
+		Meta:  map[string]any{"k": "v"},
+	}
+	if err := c.SetFieldsFrom(in); err != nil {
+		t.Fatalf("SetFieldsFrom: %v", err)
+	}
+	if err := c.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	c2, err := configmanager.LoadAppConfig("binding", defaultJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out sampleSettings
+	if err := c2.DecodeFields(&out); err != nil {
+		t.Fatalf("DecodeFields: %v", err)
+	}
+	if out.Name != in.Name || out.Port != in.Port || out.Debug != in.Debug {
+		t.Errorf("scalar mismatch: got %+v", out)
+	}
+	if len(out.Tags) != 2 || out.Tags[0] != "a" || out.Tags[1] != "b" {
+		t.Errorf("tags = %v", out.Tags)
+	}
+	if v, ok := out.Meta["k"].(string); !ok || v != "v" {
+		t.Errorf("meta = %v", out.Meta)
+	}
+}
+
+// DecodeFields 对 fields 中缺失的键保持 target 零值；指针字段为 nil 表示"未设置"。
+func TestStructBinding_missingKeysAndNilPointer(t *testing.T) {
+	useTempConfigDir(t)
+
+	defaultJSON := []byte(`{"meta": {}, "fields": {"name": "only-name"}}`)
+	c, err := configmanager.LoadAppConfig("partial", defaultJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var out sampleSettings
+	if err := c.DecodeFields(&out); err != nil {
+		t.Fatalf("DecodeFields: %v", err)
+	}
+	if out.Name != "only-name" {
+		t.Errorf("name = %q, want only-name", out.Name)
+	}
+	if out.Port != 0 {
+		t.Errorf("port = %v, want 0 (zero value)", out.Port)
+	}
+	if out.Optional != nil {
+		t.Errorf("optional = %v, want nil (missing key)", out.Optional)
+	}
+}
+
+// DecodeFields 能区分"显式 null/零值"与"缺失"：指针字段指向零值而非 nil。
+func TestStructBinding_explicitZeroVsMissing(t *testing.T) {
+	useTempConfigDir(t)
+
+	// optional 显式为 null（JSON null 解码到 *string 为 nil）——用空串更直观
+	defaultJSON := []byte(`{"meta": {}, "fields": {"optional": ""}}`)
+	c, err := configmanager.LoadAppConfig("explicit", defaultJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out sampleSettings
+	if err := c.DecodeFields(&out); err != nil {
+		t.Fatalf("DecodeFields: %v", err)
+	}
+	if out.Optional == nil {
+		t.Fatal("optional should be non-nil when explicitly set to empty string")
+	}
+	if *out.Optional != "" {
+		t.Errorf("*optional = %q, want empty string", *out.Optional)
+	}
+}
+
+// SetFieldsFrom 拒绝 nil 源和非对象编码。
+func TestStructBinding_setFieldsFromRejectsInvalid(t *testing.T) {
+	useTempConfigDir(t)
+
+	defaultJSON := []byte(`{"meta": {}, "fields": {}}`)
+	c, err := configmanager.LoadAppConfig("reject", defaultJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := c.SetFieldsFrom(nil); err == nil {
+		t.Error("SetFieldsFrom(nil): expected error, got nil")
+	}
+	// 切片编码为 JSON 数组，不是对象
+	if err := c.SetFieldsFrom([]int{1, 2}); err == nil {
+		t.Error("SetFieldsFrom(slice): expected error, got nil")
+	}
+}

@@ -223,6 +223,40 @@ func (c *Config) Save() error {
 	return nil
 }
 
+// ---------- 结构体绑定 ----------
+
+// DecodeFields 将 fields 层按 JSON tag 解码到 target（必须为指针）。
+// 经 JSON 往返实现：fields 中缺失的键不会改动 target 的对应字段，
+// 因此指针字段可区分"未设置"（nil）与"显式零值"（指向零值的指针）。
+func (c *Config) DecodeFields(target any) error {
+	encoded, err := json.Marshal(c.fields())
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(encoded, target)
+}
+
+// SetFieldsFrom 将 source 按 JSON tag 编码后整体替换 fields 层，meta 层不受影响。
+// source 为 nil 或无法编码为 JSON 对象时返回错误。
+func (c *Config) SetFieldsFrom(source any) error {
+	if source == nil {
+		return errors.New("configmanager: SetFieldsFrom source must not be nil")
+	}
+	encoded, err := json.Marshal(source)
+	if err != nil {
+		return err
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		return err
+	}
+	if fields == nil {
+		return errors.New("configmanager: SetFieldsFrom source must encode to a JSON object")
+	}
+	c.data["fields"] = fields
+	return nil
+}
+
 // load 读取 path 处的 JSON 文件到一个新的 Config 中。
 // 文件不存在视为错误。加载后自动提取 declaredVersion。
 func load(path string) (*Config, error) {
