@@ -87,6 +87,28 @@ case configmanager.Invalid:
 
 `Normalize` fills missing defaults and removes extra fields; it is a no-op when already `Valid`.
 
+### CLI integration
+
+`HandleCLI` lets your binary handle a `config` subcommand. Call it with `os.Args[1:]` before your normal flow; when the first argument is `config`, the library takes over that argument and everything after it:
+
+```go
+if handled, err := configmanager.HandleCLI("myapp", defaultConfigJSON, os.Args[1:]); handled {
+    if err != nil {
+        fmt.Fprintln(os.Stderr, err) // usage is embedded in the error
+        os.Exit(1)
+    }
+    return // subcommand handled; its output has been printed by the library
+}
+```
+
+Supported subcommands:
+
+- `config --edit` — opens the config file in the user's editor and blocks until it exits, then re-reads the file and validates that it is still a JSON object. Invalid edits are reported with the parse error and the bad content is left untouched for another fix attempt. A missing config file is created from the template first; a corrupt file is opened as-is so the user can fix it by hand.
+
+Editor selection: `$VISUAL` → `$EDITOR` (may include arguments, e.g. `code -w`), falling back to the platform default (`notepad` on Windows, `open -W` on macOS, `xdg-open` elsewhere). GUI fallbacks may return before the editor actually closes; set `$EDITOR` for reliable blocking and post-edit validation.
+
+Anything else after `config` (including a bare `config`) returns `handled = true` with an error whose message contains a short usage text.
+
 ### Repair (not yet implemented)
 
 `RepairAppConfig(appName, defaultJSON)` is reserved for future versions. It currently returns an error indicating the feature is not implemented.
@@ -107,7 +129,10 @@ Full API documentation is available on [pkg.go.dev](https://pkg.go.dev/github.co
 │                       # DecodeFields/SetFieldsFrom, Check/Normalize, Path,
 │                       # CorruptConfigError, RepairAppConfig (stub)
 ├── schema.go           # Schema types, Check, Normalize (standalone)
-├── config_test.go      # Internal tests
+├── cli.go              # CLI takeover: HandleCLI dispatch, config --edit
+│                       # (editor launch + post-edit JSON validation)
+├── config_test.go      # Internal tests (load, save)
+├── cli_test.go         # Internal tests (CLI, fake editor injection)
 ├── api_test.go         # External black-box tests
 └── examples/
     └── demo/
@@ -134,7 +159,8 @@ Tests use `t.TempDir()` and override `AppData` / `XDG_CONFIG_HOME` / `HOME` via 
 - **Re-read after first save**: On first run, `LoadAppConfig` writes the embedded JSON defaults to disk then reads it back. This ensures numeric types are always `float64` (matching subsequent runs), avoiding subtle type mismatches between first and later launches.
 - **Corrupt files fail loudly**: When an existing config file cannot be read or parsed, `LoadAppConfig` returns `nil` and a `*CorruptConfigError` (carrying the file path and original error). It does NOT fall back to defaults — callers must surface the error to the user rather than silently continuing with stale defaults. The bad file is never overwritten; `RepairAppConfig` is reserved for future repair workflows.
 - **Atomic save**: `Save()` writes to a temp file in the same directory, calls `Sync()` to flush to disk, then `Rename`s over the target. A crash during save never leaves a half-written config.
-- **Zero dependencies**: Only stdlib (`encoding/json`, `os`, `path/filepath`). Keeps the dependency tree minimal for a utility library.
+- **CLI takeover is opt-in per invocation**: `HandleCLI` only acts when `args[0]` is exactly `config`; otherwise the client's normal flow is untouched. `--edit` reuses the first-run creation flow for missing files and deliberately swallows `*CorruptConfigError` — opening the raw bad file for manual repair is that command's purpose. After the editor exits, the file must still be a JSON object or the command fails without touching the content.
+- **Zero dependencies**: Only stdlib (`encoding/json`, `os`, `os/exec`, `path/filepath`, `runtime`). Keeps the dependency tree minimal for a utility library.
 
 ## Release Process
 

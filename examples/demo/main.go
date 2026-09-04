@@ -36,6 +36,16 @@ func exeName(arg0 string) string {
 }
 
 func main() {
+	// CLI 接管：第一个参数是 config 时，该参数及其后的所有参数交给库处理，
+	// 处理完毕直接结束进程，不进入正常业务流程。
+	if handled, err := configmanager.HandleCLI(exeName(os.Args[0]), defaultConfigJSON, os.Args[1:]); handled {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	// 总会返回一个配置：首次运行从嵌入的 JSON 模板创建，之后从磁盘加载。
 	// 配置文件位于用户配置目录下。
 	c, err := configmanager.LoadAppConfig(exeName(os.Args[0]), defaultConfigJSON)
