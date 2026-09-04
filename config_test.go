@@ -7,14 +7,23 @@ import (
 	"testing"
 )
 
-// useTempConfigDir 将 os.UserConfigDir 指向一个全新的临时目录，
-// 避免测试触碰真实用户配置。
-func useTempConfigDir(t *testing.T) {
+// newTestConfig 在独立临时目录中完成 Init + RegisterDefaults + Load，
+// 返回全局单例；测试结束时自动 Reset，避免用例间串扰。
+func newTestConfig(t *testing.T, defaultJSON []byte) *Config {
 	t.Helper()
-	dir := t.TempDir()
-	t.Setenv("AppData", dir)         // Windows
-	t.Setenv("XDG_CONFIG_HOME", dir) // Linux
-	t.Setenv("HOME", dir)            // macOS
+	Reset()
+	t.Cleanup(Reset)
+	if err := Init(t.TempDir(), "app", "config.json"); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := RegisterDefaults(defaultJSON); err != nil {
+		t.Fatalf("RegisterDefaults: %v", err)
+	}
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	return c
 }
 
 // ---------- load() 正例 ----------
@@ -115,19 +124,119 @@ func TestSaveLoad(t *testing.T) {
 	}
 }
 
-// ---------- 目录权限 ----------
+// ---------- 全局装配：Init / RegisterDefaults / Load ----------
 
-func TestLoadAppConfigDirPermissions(t *testing.T) {
-	useTempConfigDir(t)
-
-	defaultJSON := []byte(`{"meta": {"schema_version": "1.0.0"}, "fields": {"key": "value"}}`)
-	if _, err := LoadAppConfig("permtest", defaultJSON); err != nil {
-		t.Fatal(err)
+// 未注册模板且文件不存在时，Load 应报错而不是静默创建空配置。
+func TestLoad_missingFileWithoutTemplate(t *testing.T) {
+	Reset()
+	t.Cleanup(Reset)
+	if err := Init(t.TempDir(), "app", "config.json"); err != nil {
+		t.Fatalf("Init: %v", err)
 	}
 
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load without template and missing file: expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "no defaults registered") {
+		t.Errorf("error = %q, want contain %q", err.Error(), "no defaults registered")
+	}
+}
+
+// Load 是进程内单例：后续调用返回同一对象。
+func TestLoad_returnsSingleton(t *testing.T) {
+	c := newTestConfig(t, []byte(`{"meta": {}, "fields": {"key": "value"}}`))
+
+	c2, err := Load()
+	if err != nil {
+		t.Fatalf("second Load: %v", err)
+	}
+	if c2 != c {
+		t.Error("Load should return the same singleton instance")
+	}
+}
+
+// Init 重复调用报错；Reset 之后允许重新装配。
+func TestInit_onlyOnce(t *testing.T) {
+	Reset()
+	t.Cleanup(Reset)
+	if err := Init(t.TempDir(), "app", "config.json"); err != nil {
+		t.Fatalf("first Init: %v", err)
+	}
+	if err := Init(t.TempDir(), "app", "config.json"); err == nil {
+		t.Fatal("second Init: expected error, got nil")
+	}
+
+	// Reset 后可重新装配
+	Reset()
+	if err := Init(t.TempDir(), "app", "config.json"); err != nil {
+		t.Fatalf("Init after Reset: %v", err)
+	}
+}
+
+// Init 参数校验（表驱动）：相对路径、绝对/上跳二级目录、带路径成分的文件名。
+func TestInit_invalidArguments(t *testing.T) {
+	dir := t.TempDir()
+	tests := []struct {
+		label                         string
+		firstDir, secondDir, fileName string
+	}{
+		{"relative firstDir", "relative/path", "app", "config.json"},
+		{"absolute secondDir", dir, dir, "config.json"},
+		{"traversal secondDir", dir, "a/../../escape", "config.json"},
+		{"fileName with separator", dir, "app", "sub/config.json"},
+		{"dot fileName", dir, "app", "."},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.label, func(t *testing.T) {
+			Reset()
+			t.Cleanup(Reset)
+			if err := Init(tt.firstDir, tt.secondDir, tt.fileName); err == nil {
+				t.Errorf("Init(%q, %q, %q): expected error, got nil", tt.firstDir, tt.secondDir, tt.fileName)
+			}
+		})
+	}
+}
+
+// RegisterDefaults 只能注册一次，且模板必须是 JSON 对象。
+func TestRegisterDefaults_validation(t *testing.T) {
+	tests := []struct {
+		label    string
+		template string
+		wantErr  bool
+	}{
+		{"valid object", `{"meta": {}, "fields": {}}`, false},
+		{"syntax error", `{invalid`, true},
+		{"array instead of object", `[1, 2]`, true},
+		{"empty input", ``, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.label, func(t *testing.T) {
+			Reset()
+			t.Cleanup(Reset)
+			err := RegisterDefaults([]byte(tt.template))
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("RegisterDefaults: error = %v, wantErr = %v", err, tt.wantErr)
+			}
+			if err != nil {
+				return
+			}
+			// 第二次注册报错
+			if err := RegisterDefaults([]byte(`{}`)); err == nil {
+				t.Error("second RegisterDefaults: expected error, got nil")
+			}
+		})
+	}
+}
+
+// ---------- 目录权限 ----------
+
+func TestInitDirPermissions(t *testing.T) {
+	c := newTestConfig(t, []byte(`{"meta": {"schema_version": "1.0.0"}, "fields": {"key": "value"}}`))
+
 	// 验证配置目录权限至少为 0700。
-	dir := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "permtest")
-	info, err := os.Stat(dir)
+	info, err := os.Stat(filepath.Dir(c.Path()))
 	if err != nil {
 		t.Fatal(err)
 	}

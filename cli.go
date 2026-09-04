@@ -2,11 +2,9 @@ package appconfig
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
 )
@@ -26,9 +24,9 @@ const cliUsage = `usage: <program> config --edit
 // args 应传入 os.Args[1:]：当 args[0] 恰为 "config" 时，接管该参数及其后的
 // 所有参数并返回 handled = true，客户端应跳过正常流程——出错时打印 err
 // 并以非零码退出，否则直接退出（--edit 的用户反馈由库自己输出）。
-// appName 与 defaultJSON 语义同 LoadAppConfig，供子命令定位或创建配置文件。
-// 不是以 config 开头时返回 handled = false，不做任何事。
-func HandleCLI(appName string, defaultJSON []byte, args []string) (bool, error) {
+// 配置文件位置与首运模板来自全局装配（Init/RegisterDefaults），
+// 未装配时使用缺省值。不是以 config 开头时返回 handled = false，不做任何事。
+func HandleCLI(args []string) (bool, error) {
 	// 空参数或第一个参数不是 config：不接管
 	if len(args) == 0 || args[0] != cliCommand {
 		return false, nil
@@ -46,36 +44,21 @@ func HandleCLI(appName string, defaultJSON []byte, args []string) (bool, error) 
 			return true, fmt.Errorf("appconfig: unexpected arguments after --edit: %s\n\n%s",
 				strings.Join(args[2:], " "), cliUsage)
 		}
-		return true, editConfig(appName, defaultJSON)
+		return true, editConfig()
 	default:
 		return true, fmt.Errorf("appconfig: unknown config subcommand %q\n\n%s", args[1], cliUsage)
 	}
 }
 
-// editLaunchEditor 启动编辑器打开配置文件并阻塞等待其退出。
-// 声明为包级变量，便于测试注入假编辑器；生产代码不要替换它。
-var editLaunchEditor = launchEditor
-
-// editConfig 打开 appName 的配置文件供手动编辑。
-// 文件缺失时先用 defaultJSON 按首运流程创建；文件已损坏时忽略
-// *CorruptConfigError——把坏文件交给用户手工修复正是本命令的用途，
-// 坏文件不被覆盖是库的设计契约。
+// editConfig 打开全局配置文件供手动编辑。
+// 文件缺失且已注册模板时先按模板创建；已存在的损坏文件原样打开，
+// 由用户手工修复（坏文件不被覆盖是库的设计契约）。
 // 阻塞等待编辑器退出后重读文件，校验必须是 JSON 对象（与 {meta, fields}
 // 形状一致），非法时返回带解析细节的错误；合法时向标准输出打印一行确认。
-func editConfig(appName string, defaultJSON []byte) error {
-	dir, err := os.UserConfigDir()
+func editConfig() error {
+	path, err := ensureConfigFile()
 	if err != nil {
 		return err
-	}
-	path := filepath.Join(dir, appName, "config.json")
-
-	// 借用 LoadAppConfig 的首运创建流程：文件缺失时按模板创建目录与文件。
-	// 损坏文件返回的 *CorruptConfigError 是预期情况，吞掉后继续打开原始内容。
-	if _, err := LoadAppConfig(appName, defaultJSON); err != nil {
-		var corrupt *CorruptConfigError
-		if !errors.As(err, &corrupt) {
-			return err
-		}
 	}
 
 	// 阻塞等待用户编辑完成
@@ -96,6 +79,10 @@ func editConfig(appName string, defaultJSON []byte) error {
 	fmt.Printf("config file edited: %s (JSON valid)\n", path)
 	return nil
 }
+
+// editLaunchEditor 启动编辑器打开配置文件并阻塞等待其退出。
+// 声明为包级变量，便于测试注入假编辑器；生产代码不要替换它。
+var editLaunchEditor = launchEditor
 
 // launchEditor 以阻塞方式启动编辑器打开 path，等待其退出。
 // 标准输入输出接到当前进程，保证终端编辑器（vim/nano 等）可用。

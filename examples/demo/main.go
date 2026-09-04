@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
-	"strings"
 
 	appconfig "github.com/mesopix/go-config-manager"
 )
@@ -22,23 +20,10 @@ var defaultConfigJSON []byte
 //go:embed schema.json
 var embeddedSchemaJSON []byte
 
-// exeName 从 os.Args[0] 风格的路径中返回不带扩展名的可执行文件名
-// （demo.exe -> demo）。
-//
-// 库不自动识别 exe 名，是有意为之：
-// 1. exe 改名会导致旧配置"丢失"（留在旧名字的目录下）
-// 2. 测试二进制名字不同，会和生产配置分家
-// 3. 多个二进制常要共享同一份配置
-// 需要自动识别时，客户端自己搞定即可：
-func exeName(arg0 string) string {
-	name := filepath.Base(arg0)
-	return strings.TrimSuffix(name, filepath.Ext(name))
-}
-
 func main() {
 	// CLI 接管：第一个参数是 config 时，该参数及其后的所有参数交给库处理，
 	// 处理完毕直接结束进程，不进入正常业务流程。
-	if handled, err := appconfig.HandleCLI(exeName(os.Args[0]), defaultConfigJSON, os.Args[1:]); handled {
+	if handled, err := appconfig.HandleCLI(os.Args[1:]); handled {
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -46,9 +31,13 @@ func main() {
 		return
 	}
 
-	// 总会返回一个配置：首次运行从嵌入的 JSON 模板创建，之后从磁盘加载。
-	// 配置文件位于用户配置目录下。
-	c, err := appconfig.LoadAppConfig(exeName(os.Args[0]), defaultConfigJSON)
+	// 注册首运模板并加载进程内单例。
+	// 未调用 Init 时按缺省值装配：用户配置目录 + 可执行文件名 + config.json；
+	// exe 改名会改变缺省路径，需要稳定路径时先调用 Init 显式指定。
+	if err := appconfig.RegisterDefaults(defaultConfigJSON); err != nil {
+		log.Fatal(err)
+	}
+	c, err := appconfig.Load()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -66,26 +55,11 @@ func main() {
 	schema := appconfig.Schema(sf.Fields)
 	fmt.Printf("schema version: %s\n", sf.Meta.Version)
 
-	// 提取当前配置数据用于检查
-	data := map[string]any{}
-	for _, key := range []string{"name", "port", "debug"} {
-		if v, ok := c.Get(key); ok {
-			data[key] = v
-		}
-	}
-
-	result := schema.Check(data)
-	fmt.Printf("check result: %d\n", result)
-
-	// 如果可校正，则 Normalize 并写回磁盘
-	switch result {
+	// 直接对 fields 层做检查；可校正则 Normalize 并写回磁盘
+	switch result := c.Check(schema); result {
 	case appconfig.MissingDefaults, appconfig.ExtraFields, appconfig.MissingAndExtra:
-		normalized, err := schema.Normalize(data)
-		if err != nil {
+		if err := c.Normalize(schema); err != nil {
 			log.Fatal(err)
-		}
-		for k, v := range normalized {
-			c.Set(k, v)
 		}
 		if err := c.Save(); err != nil {
 			log.Fatal(err)

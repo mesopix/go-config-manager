@@ -11,28 +11,51 @@ import (
 	appconfig "github.com/mesopix/go-config-manager"
 )
 
-// useTempConfigDir 将 os.UserConfigDir 指向临时目录。
-// 与 config_test.go 中的同名函数逻辑相同，但因外部测试包无法访问
-// 未导出符号，故在此独立定义一份。这是 Go 测试的标准做法。
-func useTempConfigDir(t *testing.T) {
+// useTempConfigDir 将 os.UserConfigDir 指向临时目录并返回该目录。
+// 仅供测试"未 Init 懒装配"路径使用；显式 Init 的测试直接用 t.TempDir()。
+func useTempConfigDir(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("AppData", dir)         // Windows
 	t.Setenv("XDG_CONFIG_HOME", dir) // Linux
 	t.Setenv("HOME", dir)            // macOS
+	return dir
 }
 
-// ---------- 从模板创建配置（迁入） ----------
-
-func TestLoadAppConfigCreatesFromTemplate(t *testing.T) {
-	useTempConfigDir(t)
-
-	defaultJSON := []byte(`{"meta": {}, "fields": {"name": "demo", "port": 8080}}`)
-	c, err := appconfig.LoadAppConfig("myapp", defaultJSON)
-	if err != nil {
-		t.Fatal(err)
+// useStore 在 dir 下装配一份全新全局状态（Reset → Init → RegisterDefaults），
+// 测试结束时自动 Reset；之后由测试自行调用 appconfig.Load()。
+// defaultJSON 为空串表示不注册模板。可重复调用以模拟进程重启后的重新装配。
+func useStore(t *testing.T, dir, defaultJSON string) {
+	t.Helper()
+	appconfig.Reset()
+	t.Cleanup(appconfig.Reset)
+	if err := appconfig.Init(dir, "app", "config.json"); err != nil {
+		t.Fatalf("Init: %v", err)
 	}
+	if defaultJSON != "" {
+		if err := appconfig.RegisterDefaults([]byte(defaultJSON)); err != nil {
+			t.Fatalf("RegisterDefaults: %v", err)
+		}
+	}
+}
 
+// loadStore 完成加载并断言成功。
+func loadStore(t *testing.T) *appconfig.Config {
+	t.Helper()
+	c, err := appconfig.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	return c
+}
+
+// ---------- 首运创建与加载 ----------
+
+func TestLoadCreatesFromTemplate(t *testing.T) {
+	dir := t.TempDir()
+	useStore(t, dir, `{"meta": {}, "fields": {"name": "demo", "port": 8080}}`)
+
+	c := loadStore(t)
 	if name, ok := c.Get("name"); !ok || name != "demo" {
 		t.Fatalf("name = %v, %v", name, ok)
 	}
@@ -40,33 +63,27 @@ func TestLoadAppConfigCreatesFromTemplate(t *testing.T) {
 		t.Fatalf("port = %v, %v", port, ok)
 	}
 
-	// 第二次加载从磁盘读取，并保留之前的修改。
+	// 第二次装配加载从磁盘读取，并保留之前的修改。
 	c.Set("port", 9090)
 	if err := c.Save(); err != nil {
 		t.Fatal(err)
 	}
-	c2, err := appconfig.LoadAppConfig("myapp", defaultJSON)
-	if err != nil {
-		t.Fatal(err)
-	}
+	useStore(t, dir, `{"meta": {}, "fields": {"name": "demo", "port": 8080}}`)
+	c2 := loadStore(t)
 	if port, ok := c2.Get("port"); !ok || port != float64(9090) {
 		t.Fatalf("port = %v, %v", port, ok)
 	}
 }
 
-// ---------- 数值类型契约（迁入） ----------
+// ---------- 数值类型契约 ----------
 
-// 演示上一轮讨论的坑：模板里的 8080 在 JSON 中是数字，但首次运行也走
-// "写盘→读回"，所以首末两次运行取出的类型一致，都是 float64。
-func TestLoadAppConfigNumbersAreFloat64(t *testing.T) {
-	useTempConfigDir(t)
+// 模板里的 8080 在 JSON 中是数字，但首次运行也走"写盘→读回"，
+// 所以首末两次运行取出的类型一致，都是 float64。
+func TestLoadNumbersAreFloat64(t *testing.T) {
+	dir := t.TempDir()
+	useStore(t, dir, `{"meta": {}, "fields": {"port": 8080}}`)
 
-	defaultJSON := []byte(`{"meta": {}, "fields": {"port": 8080}}`)
-
-	c, err := appconfig.LoadAppConfig("myapp", defaultJSON)
-	if err != nil {
-		t.Fatal(err)
-	}
+	c := loadStore(t)
 	port, ok := c.Get("port")
 	if !ok {
 		t.Fatal("port missing")
@@ -75,10 +92,9 @@ func TestLoadAppConfigNumbersAreFloat64(t *testing.T) {
 		t.Fatalf("first run: port is %T, want float64", port)
 	}
 
-	c2, err := appconfig.LoadAppConfig("myapp", defaultJSON)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// 模拟重启：Reset 后重新装配加载
+	useStore(t, dir, `{"meta": {}, "fields": {"port": 8080}}`)
+	c2 := loadStore(t)
 	port, ok = c2.Get("port")
 	if !ok {
 		t.Fatal("port missing")
@@ -88,50 +104,94 @@ func TestLoadAppConfigNumbersAreFloat64(t *testing.T) {
 	}
 }
 
-// ---------- 非法 defaultJSON（新增） ----------
+// ---------- 未注册模板且文件不存在 ----------
 
-func TestLoadAppConfig_invalidDefaultJSON(t *testing.T) {
-	useTempConfigDir(t)
+func TestLoad_missingFileWithoutTemplate(t *testing.T) {
+	dir := t.TempDir()
+	useStore(t, dir, "")
 
-	invalidJSON := []byte(`{not valid json}`)
-	_, err := appconfig.LoadAppConfig("badapp", invalidJSON)
+	_, err := appconfig.Load()
 	if err == nil {
-		t.Fatal("LoadAppConfig with invalid defaultJSON: expected error, got nil")
+		t.Fatal("Load without template and missing file: expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "no defaults registered") {
+		t.Errorf("error = %q, want contain %q", err.Error(), "no defaults registered")
 	}
 }
 
-// ---------- 自动创建配置文件（新增） ----------
+// ---------- 未 Init：按全缺省值懒装配 ----------
 
-func TestLoadAppConfig_autoCreatesWhenMissing(t *testing.T) {
-	useTempConfigDir(t)
-
-	defaultJSON := []byte(`{"meta": {}, "fields": {"host": "localhost", "port": 3000}}`)
-	c, err := appconfig.LoadAppConfig("newapp", defaultJSON)
-	if err != nil {
-		t.Fatalf("first LoadAppConfig: unexpected error: %v", err)
-	}
-	if c == nil {
-		t.Fatal("first LoadAppConfig: returned nil Config")
+// 不调用 Init 时，路径 = os.UserConfigDir() + 可执行文件名 + config.json。
+func TestLoad_lazyAssemblyDefaults(t *testing.T) {
+	dir := useTempConfigDir(t)
+	appconfig.Reset()
+	t.Cleanup(appconfig.Reset)
+	if err := appconfig.RegisterDefaults([]byte(`{"meta": {}, "fields": {"lazy": true}}`)); err != nil {
+		t.Fatalf("RegisterDefaults: %v", err)
 	}
 
-	if host, ok := c.Get("host"); !ok || host != "localhost" {
-		t.Errorf("host = %v, %v; want localhost, true", host, ok)
+	c := loadStore(t)
+	if !strings.HasPrefix(c.Path(), dir) {
+		t.Errorf("path = %q, want under %q", c.Path(), dir)
 	}
-	if port, ok := c.Get("port"); !ok || port != float64(3000) {
-		t.Errorf("port = %v, %v; want 3000, true", port, ok)
+	if filepath.Base(c.Path()) != "config.json" {
+		t.Errorf("file name = %q, want config.json", filepath.Base(c.Path()))
+	}
+	if v, ok := c.Get("lazy"); !ok || v != true {
+		t.Errorf("lazy = %v, %v; want true, true", v, ok)
 	}
 }
 
-// ---------- Save → Load 往返一致性（新增） ----------
+// ---------- Init 装配约束 ----------
 
-func TestLoadAppConfig_saveLoadRoundTrip(t *testing.T) {
-	useTempConfigDir(t)
-
-	defaultJSON := []byte(`{"meta": {}, "fields": {"key": "original"}}`)
-	c, err := appconfig.LoadAppConfig("roundtrip", defaultJSON)
-	if err != nil {
-		t.Fatal(err)
+// Init 只能成功调用一次；Reset 之后允许重新装配。
+func TestInit_onlyOnce(t *testing.T) {
+	appconfig.Reset()
+	t.Cleanup(appconfig.Reset)
+	if err := appconfig.Init(t.TempDir(), "app", "config.json"); err != nil {
+		t.Fatalf("first Init: %v", err)
 	}
+	if err := appconfig.Init(t.TempDir(), "app", "config.json"); err == nil {
+		t.Fatal("second Init: expected error, got nil")
+	}
+
+	appconfig.Reset()
+	if err := appconfig.Init(t.TempDir(), "app", "config.json"); err != nil {
+		t.Fatalf("Init after Reset: %v", err)
+	}
+}
+
+// RegisterDefaults 只能注册一次。
+func TestRegisterDefaults_onlyOnce(t *testing.T) {
+	appconfig.Reset()
+	t.Cleanup(appconfig.Reset)
+	if err := appconfig.RegisterDefaults([]byte(`{"meta": {}, "fields": {}}`)); err != nil {
+		t.Fatalf("first RegisterDefaults: %v", err)
+	}
+	if err := appconfig.RegisterDefaults([]byte(`{"meta": {}, "fields": {}}`)); err == nil {
+		t.Fatal("second RegisterDefaults: expected error, got nil")
+	}
+}
+
+// RegisterDefaults 立即校验模板：必须是合法的 JSON 对象。
+func TestRegisterDefaults_invalidTemplate(t *testing.T) {
+	appconfig.Reset()
+	t.Cleanup(appconfig.Reset)
+	if err := appconfig.RegisterDefaults([]byte(`{not valid json}`)); err == nil {
+		t.Error("RegisterDefaults with invalid JSON: expected error, got nil")
+	}
+	// 注册失败后仍可重新注册合法模板（失败不占用"仅一次"名额）
+	if err := appconfig.RegisterDefaults([]byte(`{"meta": {}, "fields": {}}`)); err != nil {
+		t.Errorf("RegisterDefaults after failed attempt: %v", err)
+	}
+}
+
+// ---------- Save → Load 往返一致性 ----------
+
+func TestLoad_saveLoadRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	useStore(t, dir, `{"meta": {}, "fields": {"key": "original"}}`)
+	c := loadStore(t)
 
 	c.Set("key", "modified")
 	c.Set("extra", float64(42))
@@ -139,10 +199,8 @@ func TestLoadAppConfig_saveLoadRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c2, err := appconfig.LoadAppConfig("roundtrip", defaultJSON)
-	if err != nil {
-		t.Fatal(err)
-	}
+	useStore(t, dir, `{"meta": {}, "fields": {"key": "original"}}`)
+	c2 := loadStore(t)
 
 	if val, ok := c2.Get("key"); !ok || val != "modified" {
 		t.Errorf("key = %v, %v; want modified, true", val, ok)
@@ -152,43 +210,31 @@ func TestLoadAppConfig_saveLoadRoundTrip(t *testing.T) {
 	}
 }
 
-// ---------- 二次加载忽略默认值（新增） ----------
+// ---------- 二次加载忽略默认值 ----------
 
-func TestLoadAppConfig_secondLoadIgnoresDefaults(t *testing.T) {
-	useTempConfigDir(t)
-
-	defaultJSON := []byte(`{"meta": {}, "fields": {"color": "red"}}`)
-	c, err := appconfig.LoadAppConfig("overwrite", defaultJSON)
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestLoad_secondLoadIgnoresDefaults(t *testing.T) {
+	dir := t.TempDir()
+	useStore(t, dir, `{"meta": {}, "fields": {"color": "red"}}`)
+	c := loadStore(t)
 
 	c.Set("color", "blue")
 	if err := c.Save(); err != nil {
 		t.Fatal(err)
 	}
 
-	// 用不同的默认值再次加载，应读到磁盘上的 "blue" 而非新默认的 "green"。
-	newDefaultJSON := []byte(`{"meta": {}, "fields": {"color": "green"}}`)
-	c2, err := appconfig.LoadAppConfig("overwrite", newDefaultJSON)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// 用不同的默认值重新装配加载，应读到磁盘上的 "blue" 而非新默认的 "green"。
+	useStore(t, dir, `{"meta": {}, "fields": {"color": "green"}}`)
+	c2 := loadStore(t)
 	if val, ok := c2.Get("color"); !ok || val != "blue" {
 		t.Errorf("color = %v, %v; want blue (from disk), true", val, ok)
 	}
 }
 
-// ---------- Get 不存在的 key（新增） ----------
+// ---------- Get 不存在的 key ----------
 
-func TestLoadAppConfig_getMissingKey(t *testing.T) {
-	useTempConfigDir(t)
-
-	defaultJSON := []byte(`{"meta": {}, "fields": {"exists": true}}`)
-	c, err := appconfig.LoadAppConfig("missingkey", defaultJSON)
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestLoad_getMissingKey(t *testing.T) {
+	useStore(t, t.TempDir(), `{"meta": {}, "fields": {"exists": true}}`)
+	c := loadStore(t)
 
 	val, ok := c.Get("nonexistent")
 	if ok {
@@ -202,13 +248,8 @@ func TestLoadAppConfig_getMissingKey(t *testing.T) {
 // ---------- Schema + Config 协作：Check 端到端 ----------
 
 func TestSchema_checkWithConfig(t *testing.T) {
-	useTempConfigDir(t)
-
-	defaultJSON := []byte(`{"meta": {}, "fields": {"host": "localhost", "port": 8080}}`)
-	c, err := appconfig.LoadAppConfig("schematest", defaultJSON)
-	if err != nil {
-		t.Fatal(err)
-	}
+	useStore(t, t.TempDir(), `{"meta": {}, "fields": {"host": "localhost", "port": 8080}}`)
+	c := loadStore(t)
 
 	schema := appconfig.Schema{
 		"host": {Type: appconfig.TypeString, Required: true},
@@ -231,14 +272,10 @@ func TestSchema_checkWithConfig(t *testing.T) {
 // ---------- Schema + Config 协作：Normalize 补全后写回 ----------
 
 func TestSchema_normalizeAndSaveBack(t *testing.T) {
-	useTempConfigDir(t)
-
+	dir := t.TempDir()
 	// 首次加载只有 host，缺少 port
-	defaultJSON := []byte(`{"meta": {}, "fields": {"host": "localhost"}}`)
-	c, err := appconfig.LoadAppConfig("normtest", defaultJSON)
-	if err != nil {
-		t.Fatal(err)
-	}
+	useStore(t, dir, `{"meta": {}, "fields": {"host": "localhost"}}`)
+	c := loadStore(t)
 
 	schema := appconfig.Schema{
 		"host": {Type: appconfig.TypeString, Required: true},
@@ -270,11 +307,9 @@ func TestSchema_normalizeAndSaveBack(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 重新加载验证 port 已持久化
-	c2, err := appconfig.LoadAppConfig("normtest", defaultJSON)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// 重新装配加载验证 port 已持久化
+	useStore(t, dir, `{"meta": {}, "fields": {"host": "localhost"}}`)
+	c2 := loadStore(t)
 	if port, ok := c2.Get("port"); !ok || port != float64(3000) {
 		t.Errorf("port after normalize+save = %v, %v; want 3000, true", port, ok)
 	}
@@ -282,36 +317,25 @@ func TestSchema_normalizeAndSaveBack(t *testing.T) {
 
 // ---------- 坏文件：专用错误类型 ----------
 
-// 已存在的配置文件损坏时，LoadAppConfig 应返回 nil 和 CorruptConfigError，
+// 已存在的配置文件损坏时，Load 应返回 nil 和 CorruptConfigError，
 // 不提供默认值降级，且不覆盖磁盘上的坏文件。
-func TestLoadAppConfig_corruptFileReturnsTypedError(t *testing.T) {
-	useTempConfigDir(t)
-
-	defaultJSON := []byte(`{"meta": {"version": "1"}, "fields": {"color": "red"}}`)
-
-	// 先正常创建配置文件
-	if _, err := appconfig.LoadAppConfig("corruptapp", defaultJSON); err != nil {
-		t.Fatal(err)
-	}
+func TestLoad_corruptFileReturnsTypedError(t *testing.T) {
+	dir := t.TempDir()
+	useStore(t, dir, `{"meta": {"version": "1"}, "fields": {"color": "red"}}`)
+	c := loadStore(t)
 
 	// 手动把配置文件改坏
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(dir, "corruptapp", "config.json")
+	path := c.Path()
 	corrupted := []byte(`{invalid json`)
 	if err := os.WriteFile(path, corrupted, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	// 应返回错误和 nil 配置，杜绝调用方拿默认值静默继续
-	c, err := appconfig.LoadAppConfig("corruptapp", defaultJSON)
+	// 重新装配加载：应返回错误和 nil 配置，杜绝调用方拿默认值静默继续
+	useStore(t, dir, `{"meta": {"version": "1"}, "fields": {"color": "red"}}`)
+	_, err := appconfig.Load()
 	if err == nil {
-		t.Fatal("LoadAppConfig with corrupt file: expected error, got nil")
-	}
-	if c != nil {
-		t.Errorf("LoadAppConfig with corrupt file: expected nil Config, got %v", c)
+		t.Fatal("Load with corrupt file: expected error, got nil")
 	}
 
 	// 错误可通过 errors.As 识别为 CorruptConfigError，且携带正确路径
@@ -335,13 +359,10 @@ func TestLoadAppConfig_corruptFileReturnsTypedError(t *testing.T) {
 
 // ---------- 修复接口：预留未实现 ----------
 
-// RepairAppConfig 是预留接口，当前阶段固定返回未实现错误。
-func TestRepairAppConfig_notImplementedYet(t *testing.T) {
-	useTempConfigDir(t)
-
-	err := appconfig.RepairAppConfig("anyapp", []byte(`{"meta": {}, "fields": {}}`))
-	if err == nil {
-		t.Fatal("RepairAppConfig: expected error, got nil")
+// Repair 是预留接口，当前阶段固定返回未实现错误。
+func TestRepair_notImplementedYet(t *testing.T) {
+	if err := appconfig.Repair(); err == nil {
+		t.Fatal("Repair: expected error, got nil")
 	}
 }
 
@@ -358,13 +379,9 @@ type sampleSettings struct {
 
 // DecodeFields 往返一致：写入 → 读回字段值相同。
 func TestStructBinding_roundTrip(t *testing.T) {
-	useTempConfigDir(t)
-
-	defaultJSON := []byte(`{"meta": {}, "fields": {"name": "demo", "port": 8080}}`)
-	c, err := appconfig.LoadAppConfig("binding", defaultJSON)
-	if err != nil {
-		t.Fatal(err)
-	}
+	dir := t.TempDir()
+	useStore(t, dir, `{"meta": {}, "fields": {"name": "demo", "port": 8080}}`)
+	c := loadStore(t)
 
 	in := sampleSettings{
 		Name:  "changed",
@@ -380,10 +397,8 @@ func TestStructBinding_roundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c2, err := appconfig.LoadAppConfig("binding", defaultJSON)
-	if err != nil {
-		t.Fatal(err)
-	}
+	useStore(t, dir, `{"meta": {}, "fields": {"name": "demo", "port": 8080}}`)
+	c2 := loadStore(t)
 	var out sampleSettings
 	if err := c2.DecodeFields(&out); err != nil {
 		t.Fatalf("DecodeFields: %v", err)
@@ -401,13 +416,8 @@ func TestStructBinding_roundTrip(t *testing.T) {
 
 // DecodeFields 对 fields 中缺失的键保持 target 零值；指针字段为 nil 表示"未设置"。
 func TestStructBinding_missingKeysAndNilPointer(t *testing.T) {
-	useTempConfigDir(t)
-
-	defaultJSON := []byte(`{"meta": {}, "fields": {"name": "only-name"}}`)
-	c, err := appconfig.LoadAppConfig("partial", defaultJSON)
-	if err != nil {
-		t.Fatal(err)
-	}
+	useStore(t, t.TempDir(), `{"meta": {}, "fields": {"name": "only-name"}}`)
+	c := loadStore(t)
 
 	var out sampleSettings
 	if err := c.DecodeFields(&out); err != nil {
@@ -426,14 +436,10 @@ func TestStructBinding_missingKeysAndNilPointer(t *testing.T) {
 
 // DecodeFields 能区分"显式 null/零值"与"缺失"：指针字段指向零值而非 nil。
 func TestStructBinding_explicitZeroVsMissing(t *testing.T) {
-	useTempConfigDir(t)
-
 	// optional 显式为 null（JSON null 解码到 *string 为 nil）——用空串更直观
-	defaultJSON := []byte(`{"meta": {}, "fields": {"optional": ""}}`)
-	c, err := appconfig.LoadAppConfig("explicit", defaultJSON)
-	if err != nil {
-		t.Fatal(err)
-	}
+	useStore(t, t.TempDir(), `{"meta": {}, "fields": {"optional": ""}}`)
+	c := loadStore(t)
+
 	var out sampleSettings
 	if err := c.DecodeFields(&out); err != nil {
 		t.Fatalf("DecodeFields: %v", err)
@@ -448,13 +454,8 @@ func TestStructBinding_explicitZeroVsMissing(t *testing.T) {
 
 // SetFieldsFrom 拒绝 nil 源和非对象编码。
 func TestStructBinding_setFieldsFromRejectsInvalid(t *testing.T) {
-	useTempConfigDir(t)
-
-	defaultJSON := []byte(`{"meta": {}, "fields": {}}`)
-	c, err := appconfig.LoadAppConfig("reject", defaultJSON)
-	if err != nil {
-		t.Fatal(err)
-	}
+	useStore(t, t.TempDir(), `{"meta": {}, "fields": {}}`)
+	c := loadStore(t)
 
 	if err := c.SetFieldsFrom(nil); err == nil {
 		t.Error("SetFieldsFrom(nil): expected error, got nil")
@@ -469,13 +470,8 @@ func TestStructBinding_setFieldsFromRejectsInvalid(t *testing.T) {
 
 // Config.Check 直接作用于 fields 层，无需手动提取 map。
 func TestConfig_checkDirectlyOnFields(t *testing.T) {
-	useTempConfigDir(t)
-
-	defaultJSON := []byte(`{"meta": {}, "fields": {"host": "localhost", "port": 8080}}`)
-	c, err := appconfig.LoadAppConfig("cfgcheck", defaultJSON)
-	if err != nil {
-		t.Fatal(err)
-	}
+	useStore(t, t.TempDir(), `{"meta": {}, "fields": {"host": "localhost", "port": 8080}}`)
+	c := loadStore(t)
 
 	schema := appconfig.Schema{
 		"host": {Type: appconfig.TypeString, Required: true},
@@ -488,13 +484,8 @@ func TestConfig_checkDirectlyOnFields(t *testing.T) {
 
 // Config.Normalize 在 Valid 状态下为 no-op，不报错。
 func TestConfig_normalizeValidIsNoop(t *testing.T) {
-	useTempConfigDir(t)
-
-	defaultJSON := []byte(`{"meta": {}, "fields": {"key": "value"}}`)
-	c, err := appconfig.LoadAppConfig("noopnorm", defaultJSON)
-	if err != nil {
-		t.Fatal(err)
-	}
+	useStore(t, t.TempDir(), `{"meta": {}, "fields": {"key": "value"}}`)
+	c := loadStore(t)
 
 	schema := appconfig.Schema{
 		"key": {Type: appconfig.TypeString, Required: true},
@@ -509,13 +500,8 @@ func TestConfig_normalizeValidIsNoop(t *testing.T) {
 
 // Config.Normalize 补全缺失默认值并写回 fields 层。
 func TestConfig_normalizeFillsDefaultsAndWritesBack(t *testing.T) {
-	useTempConfigDir(t)
-
-	defaultJSON := []byte(`{"meta": {}, "fields": {"host": "localhost"}}`)
-	c, err := appconfig.LoadAppConfig("normfill", defaultJSON)
-	if err != nil {
-		t.Fatal(err)
-	}
+	useStore(t, t.TempDir(), `{"meta": {}, "fields": {"host": "localhost"}}`)
+	c := loadStore(t)
 
 	schema := appconfig.Schema{
 		"host": {Type: appconfig.TypeString, Required: true},
@@ -534,13 +520,8 @@ func TestConfig_normalizeFillsDefaultsAndWritesBack(t *testing.T) {
 
 // Config.Normalize 删除多余字段。
 func TestConfig_normalizeRemovesExtraFields(t *testing.T) {
-	useTempConfigDir(t)
-
-	defaultJSON := []byte(`{"meta": {}, "fields": {"host": "localhost", "extra": "junk"}}`)
-	c, err := appconfig.LoadAppConfig("normextra", defaultJSON)
-	if err != nil {
-		t.Fatal(err)
-	}
+	useStore(t, t.TempDir(), `{"meta": {}, "fields": {"host": "localhost", "extra": "junk"}}`)
+	c := loadStore(t)
 
 	schema := appconfig.Schema{
 		"host": {Type: appconfig.TypeString, Required: true},
@@ -561,13 +542,8 @@ func TestConfig_normalizeRemovesExtraFields(t *testing.T) {
 
 // Config.Normalize 在 Invalid 状态下返回错误，不修改 fields。
 func TestConfig_normalizeInvalidReturnsError(t *testing.T) {
-	useTempConfigDir(t)
-
-	defaultJSON := []byte(`{"meta": {}, "fields": {"port": "not-a-number"}}`)
-	c, err := appconfig.LoadAppConfig("norminvalid", defaultJSON)
-	if err != nil {
-		t.Fatal(err)
-	}
+	useStore(t, t.TempDir(), `{"meta": {}, "fields": {"port": "not-a-number"}}`)
+	c := loadStore(t)
 
 	schema := appconfig.Schema{
 		"port": {Type: appconfig.TypeFloat, Required: true},
@@ -588,8 +564,6 @@ func TestConfig_normalizeInvalidReturnsError(t *testing.T) {
 
 // 不是以 config 开头的参数不接管，也不产生错误。
 func TestHandleCLI_ignoresNonConfigArgs(t *testing.T) {
-	useTempConfigDir(t)
-
 	for _, args := range [][]string{
 		{},                        // 客户端无任何参数
 		{"serve"},                 // 正常业务参数
@@ -597,7 +571,7 @@ func TestHandleCLI_ignoresNonConfigArgs(t *testing.T) {
 		{"Config"},                // 大小写敏感，不接管
 		{"config.json", "--edit"}, // 子命令必须完整等于 config
 	} {
-		handled, err := appconfig.HandleCLI("myapp", []byte(`{}`), args)
+		handled, err := appconfig.HandleCLI(args)
 		if handled {
 			t.Errorf("HandleCLI(%q): handled = true, want false", args)
 		}
@@ -610,10 +584,8 @@ func TestHandleCLI_ignoresNonConfigArgs(t *testing.T) {
 // config 子命令分发：错误分支（表驱动）。
 // --edit 的成功路径不在此外部测试中执行：编辑器启动函数是未导出注入点，
 // 外部包无法替换，真跑会启动真实编辑器；该路径由内部包 cli_test.go 用
-// 假编辑器覆盖（TestHandleCLI_editRoute）。
+// 假编辑器覆盖。
 func TestHandleCLI_dispatch(t *testing.T) {
-	useTempConfigDir(t)
-
 	tests := []struct {
 		label       string
 		args        []string
@@ -628,7 +600,7 @@ func TestHandleCLI_dispatch(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.label, func(t *testing.T) {
-			handled, err := appconfig.HandleCLI("myapp", []byte(`{}`), tt.args)
+			handled, err := appconfig.HandleCLI(tt.args)
 			if !handled {
 				t.Fatalf("handled = false, want true")
 			}

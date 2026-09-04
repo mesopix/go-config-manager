@@ -1,4 +1,14 @@
 // 包 appconfig 是一个基于 JSON 文件的轻量级配置存储库。
+//
+// 全局用法：进程内只有一份配置。通过 Init（可选，装配存储路径）与
+// RegisterDefaults（可选，注册首运模板）完成装配，Load 返回进程内单例，
+// 后续所有读写都作用在这个对象上：
+//
+//	appconfig.Init(firstDir, secondDir, fileName) // 可选；空参数用缺省值
+//	appconfig.RegisterDefaults(defaultJSON)       // 可选；//go:embed 的模板
+//	c, err := appconfig.Load()
+//	c.Set("port", 9090)
+//	c.Save()
 package appconfig
 
 import (
@@ -7,59 +17,209 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 )
 
-// LoadAppConfig 加载 appName 对应的配置。首次运行时从 defaultJSON 创建配置文件，
-// 因此除非无法获取用户配置目录或 defaultJSON 本身非法，否则总会返回一个配置对象。
-// 已存在的配置文件无法读取或解析时，返回 nil 和 *CorruptConfigError，
-// 不提供默认值降级，也不覆盖磁盘上的坏文件。
-// defaultJSON 应为合法的 JSON 对象（如通过 //go:embed 嵌入的模板文件）。
-// 数值会从磁盘读回，所以类型统一为 float64。
-func LoadAppConfig(appName string, defaultJSON []byte) (*Config, error) {
-	// 获取用户配置目录
-	dir, err := os.UserConfigDir()
-	// 获取失败，返回
+// defaultFileName 是配置文件名的缺省值。
+const defaultFileName = "config.json"
+
+// 全局装配状态。cfgInited/cfgBaseDir/cfgSubDir/cfgFileName/cfgTemplate 记录
+// 显式装配结果，singleton 是 Load 成功后的进程内单例。
+// 所有导出装配函数经 globalMu 串行化；未导出辅助函数由调用方持锁。
+var (
+	globalMu    sync.Mutex
+	cfgInited   bool   // Init 是否已成功调用
+	cfgBaseDir  string // Init 装配的一级目录；未装配时为空
+	cfgSubDir   string // Init 装配的二级目录；未装配时为空
+	cfgFileName string // Init 装配的文件名；未装配时为空
+	cfgTemplate []byte // RegisterDefaults 注册并校验过的首运模板；nil 表示未注册
+	singleton   *Config
+)
+
+// Init 装配全局配置的存储路径，仅能在 Load 之前成功调用一次。
+// 三个参数传空字符串时使用缺省值：
+//   - firstDir：配置文件一级目录（完整绝对路径），缺省为 os.UserConfigDir()；
+//   - secondDir：二级目录名，可含路径分隔符实现嵌套，缺省为可执行文件名
+//     （不含扩展名）。注意 exe 改名会改变缺省路径，需要稳定路径时显式传入；
+//   - fileName：配置文件名，缺省为 "config.json"。
+//
+// firstDir 必须是绝对路径；secondDir 不得为绝对路径或包含 ".." 上跳成分；
+// fileName 必须是纯文件名。重复调用返回错误；测试或重新装配先调用 Reset。
+func Init(firstDir, secondDir, fileName string) error {
+	globalMu.Lock()
+	defer globalMu.Unlock()
+	if cfgInited || singleton != nil {
+		return errors.New("appconfig: Init must be called only once; call Reset first to re-assemble")
+	}
+	if firstDir == "" {
+		dir, err := os.UserConfigDir()
+		if err != nil {
+			return fmt.Errorf("appconfig: resolve default base dir: %w", err)
+		}
+		firstDir = dir
+	}
+	if !filepath.IsAbs(firstDir) {
+		return fmt.Errorf("appconfig: firstDir %q must be an absolute path", firstDir)
+	}
+	if secondDir == "" {
+		secondDir = defaultSubDir()
+	}
+	if err := validateSubDir(secondDir); err != nil {
+		return err
+	}
+	if fileName == "" {
+		fileName = defaultFileName
+	}
+	if err := validateFileName(fileName); err != nil {
+		return err
+	}
+	cfgInited = true
+	cfgBaseDir, cfgSubDir, cfgFileName = firstDir, secondDir, fileName
+	return nil
+}
+
+// validateSubDir 校验二级目录名：不得为绝对路径，Clean 后不得上跳到一级目录之外。
+func validateSubDir(sub string) error {
+	if filepath.IsAbs(sub) || filepath.VolumeName(sub) != "" {
+		return fmt.Errorf("appconfig: secondDir %q must be a relative name", sub)
+	}
+	cleaned := filepath.Clean(sub)
+	if cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("appconfig: secondDir %q must not traverse outside the first dir", sub)
+	}
+	return nil
+}
+
+// validateFileName 校验配置文件名：必须是纯文件名，不得含路径成分。
+func validateFileName(name string) error {
+	if name == "." || name == ".." || filepath.Base(name) != name {
+		return fmt.Errorf("appconfig: fileName %q must be a plain file name", name)
+	}
+	return nil
+}
+
+// defaultSubDir 返回缺省二级目录：可执行文件名（不含扩展名）。
+func defaultSubDir() string {
+	name := filepath.Base(os.Args[0])
+	return strings.TrimSuffix(name, filepath.Ext(name))
+}
+
+// RegisterDefaults 注册首运创建配置文件所用的默认模板，仅能注册一次。
+// defaultJSON 必须是合法的 JSON 对象，注册时立即校验，非法即报错。
+func RegisterDefaults(defaultJSON []byte) error {
+	globalMu.Lock()
+	defer globalMu.Unlock()
+	if cfgTemplate != nil {
+		return errors.New("appconfig: defaults already registered; call Reset first to re-register")
+	}
+	var object map[string]any
+	if err := json.Unmarshal(defaultJSON, &object); err != nil {
+		return fmt.Errorf("appconfig: default template must be a JSON object: %w", err)
+	}
+	cfgTemplate = defaultJSON
+	return nil
+}
+
+// Reset 清空全局装配状态与已加载的单例，回到未初始化状态。
+// 仅供测试或需要重新装配的场景使用；常规代码不应调用。
+func Reset() {
+	globalMu.Lock()
+	defer globalMu.Unlock()
+	cfgInited = false
+	cfgBaseDir, cfgSubDir, cfgFileName = "", "", ""
+	cfgTemplate = nil
+	singleton = nil
+}
+
+// configPath 返回配置文件完整路径，不做磁盘操作。调用方需持有 globalMu。
+func configPath() (string, error) {
+	base, sub, name := cfgBaseDir, cfgSubDir, cfgFileName
+	if !cfgInited {
+		// 未显式装配：全部使用缺省值懒装配
+		dir, err := os.UserConfigDir()
+		if err != nil {
+			return "", fmt.Errorf("appconfig: resolve default base dir: %w", err)
+		}
+		base = dir
+		sub = defaultSubDir()
+		name = defaultFileName
+	}
+	return filepath.Join(base, sub, name), nil
+}
+
+// Load 返回全局配置对象（进程内单例）。首次调用完成路径装配并加载：
+// 文件不存在且已注册模板时按首运流程创建，并从磁盘重读（保证数值类型
+// 与后续运行一致）；文件存在但无法读取或解析时返回 nil 和
+// *CorruptConfigError，不提供默认值降级，也不覆盖磁盘上的坏文件；
+// 文件不存在且未注册模板时返回错误。后续调用返回同一对象。
+// 未调用 Init 时按全缺省值装配（用户配置目录 + 可执行文件名 + config.json）。
+func Load() (*Config, error) {
+	globalMu.Lock()
+	defer globalMu.Unlock()
+	if singleton != nil {
+		return singleton, nil
+	}
+	path, err := configPath()
 	if err != nil {
 		return nil, err
 	}
-
-	// 拼凑配置路径：<用户配置目录>/<appName>/config.json
-	path := filepath.Join(dir, appName, "config.json")
-
-	// 直接尝试加载
 	loaded, err := load(path)
-
-	// 如果加载成功，就直接返回配置对象
 	if err == nil {
-		return loaded, nil
+		singleton = loaded
+		return singleton, nil
 	}
-
-	// 文件存在但无法读取或解析：返回专用错误类型。
-	// 不提供默认值降级，杜绝调用方拿默认值静默继续；
-	// 不覆盖磁盘上的坏文件，留给 RepairAppConfig 或人工处置。
 	if !os.IsNotExist(err) {
 		return nil, &CorruptConfigError{Path: path, Err: err}
 	}
-
-	// 代码能走到这里，说明是第一次运行
-	// 首先创建配置目录
-	if err := os.MkdirAll(filepath.Dir(path), configDirMode); err != nil {
+	// 首次运行：按模板创建后再从磁盘重读
+	if _, err := createFromDefaults(path); err != nil {
 		return nil, err
 	}
-
-	// 解析默认 JSON 并构造配置对象
-	created, err := newConfigFromDefaults(path, defaultJSON)
+	singleton, err = load(path)
 	if err != nil {
 		return nil, err
 	}
+	return singleton, nil
+}
 
-	// 保存配置到文件
+// createFromDefaults 在 path 处按已注册模板创建配置文件（含目录）。
+// 未注册模板时报错。调用方需持有 globalMu。
+func createFromDefaults(path string) (*Config, error) {
+	if cfgTemplate == nil {
+		return nil, fmt.Errorf("appconfig: config file %s does not exist and no defaults registered", path)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), configDirMode); err != nil {
+		return nil, err
+	}
+	created, err := newConfigFromDefaults(path, cfgTemplate)
+	if err != nil {
+		return nil, err
+	}
 	if err := created.Save(); err != nil {
 		return nil, err
 	}
+	return created, nil
+}
 
-	// 从磁盘重读配置文件
-	return load(path)
+// ensureConfigFile 返回配置文件路径，缺失且已注册模板时按首运流程创建。
+// 已存在的文件（含损坏文件）原样保留——把坏文件交给编辑器手工修复
+// 正是 --edit 子命令的用途。
+func ensureConfigFile() (string, error) {
+	globalMu.Lock()
+	defer globalMu.Unlock()
+	path, err := configPath()
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		if _, err := createFromDefaults(path); err != nil {
+			return "", err
+		}
+	} else if err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 // CorruptConfigError 表示已存在的配置文件无法读取或解析。
@@ -79,9 +239,9 @@ func (e *CorruptConfigError) Unwrap() error {
 	return e.Err
 }
 
-// RepairAppConfig 修复 appName 对应的损坏配置文件。预留接口，尚未实现；
-// 未来版本将基于 defaultJSON 重建配置文件或引导用户修复。
-func RepairAppConfig(appName string, defaultJSON []byte) error {
+// Repair 修复全局配置对应的损坏配置文件。预留接口，尚未实现；
+// 未来版本将基于已注册模板重建配置文件或引导用户修复。
+func Repair() error {
 	return errRepairNotImplemented
 }
 
@@ -90,6 +250,7 @@ const UnknownVersion = "UNKNOWN"
 
 // Config 持有以磁盘 JSON 文件为后端的配置值。
 // data 存储完整的 {meta, fields} 两层结构。
+// 实例方法未做并发同步：多 goroutine 共享时由调用方自行加锁。
 type Config struct {
 	path            string
 	data            map[string]any
