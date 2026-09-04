@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	configmanager "github.com/mesopix/go-config-manager"
@@ -347,12 +348,12 @@ func TestRepairAppConfig_notImplementedYet(t *testing.T) {
 // ---------- 结构体绑定：DecodeFields / SetFieldsFrom ----------
 
 type sampleSettings struct {
-	Name    string            `json:"name"`
-	Port    float64           `json:"port"`
-	Debug   bool              `json:"debug,omitempty"`
-	Tags    []string          `json:"tags,omitempty"`
-	Meta    map[string]any    `json:"meta,omitempty"`
-	Optional *string         `json:"optional,omitempty"`
+	Name     string         `json:"name"`
+	Port     float64        `json:"port"`
+	Debug    bool           `json:"debug,omitempty"`
+	Tags     []string       `json:"tags,omitempty"`
+	Meta     map[string]any `json:"meta,omitempty"`
+	Optional *string        `json:"optional,omitempty"`
 }
 
 // DecodeFields 往返一致：写入 → 读回字段值相同。
@@ -580,5 +581,68 @@ func TestConfig_normalizeInvalidReturnsError(t *testing.T) {
 	// fields 未被改动
 	if val, ok := c.Get("port"); !ok || val != "not-a-number" {
 		t.Errorf("port after failed normalize = %v, %v; want not-a-number, true", val, ok)
+	}
+}
+
+// ---------- CLI 接管：HandleCLI 分发 ----------
+
+// 不是以 config 开头的参数不接管，也不产生错误。
+func TestHandleCLI_ignoresNonConfigArgs(t *testing.T) {
+	useTempConfigDir(t)
+
+	for _, args := range [][]string{
+		{},                        // 客户端无任何参数
+		{"serve"},                 // 正常业务参数
+		{"--config", "x"},         // 恰好包含 config 字样的其他参数
+		{"Config"},                // 大小写敏感，不接管
+		{"config.json", "--edit"}, // 子命令必须完整等于 config
+	} {
+		handled, err := configmanager.HandleCLI("myapp", []byte(`{}`), args)
+		if handled {
+			t.Errorf("HandleCLI(%q): handled = true, want false", args)
+		}
+		if err != nil {
+			t.Errorf("HandleCLI(%q): unexpected error: %v", args, err)
+		}
+	}
+}
+
+// config 子命令分发：合法路径与各错误分支（表驱动）。
+// --edit 的真实行为在第 2 步实现，当前为预留桩，仅断言返回"未实现"错误。
+func TestHandleCLI_dispatch(t *testing.T) {
+	useTempConfigDir(t)
+
+	tests := []struct {
+		label       string
+		args        []string
+		wantErr     bool
+		wantContain string // 错误信息必须包含的内容
+	}{
+		{"bare config without subcommand", []string{"config"}, true, "usage"},
+		{"unknown subcommand", []string{"config", "rebuild"}, true, "usage"},
+		{"--help is not implemented yet", []string{"config", "--help"}, true, "usage"},
+		{"edit with extra args", []string{"config", "--edit", "extra"}, true, "usage"},
+		{"edit stub", []string{"config", "--edit"}, true, "not implemented"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.label, func(t *testing.T) {
+			handled, err := configmanager.HandleCLI("myapp", []byte(`{}`), tt.args)
+			if !handled {
+				t.Fatalf("handled = false, want true")
+			}
+			if !tt.wantErr {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.wantContain) {
+				t.Errorf("error = %q, want contain %q", err.Error(), tt.wantContain)
+			}
+		})
 	}
 }
