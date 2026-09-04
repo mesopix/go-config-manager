@@ -9,12 +9,6 @@ import (
 	"path/filepath"
 )
 
-// configDirMode 为 rwx------：仅属主可访问配置目录。
-const configDirMode = 0o700
-
-// configFileMode 为 rw-------：仅属主可读写，防止敏感配置泄露。
-const configFileMode = 0o600
-
 // LoadAppConfig 加载 appName 对应的配置。首次运行时从 defaultJSON 创建配置文件，
 // 因此除非无法获取用户配置目录或 defaultJSON 本身非法，否则总会返回一个配置对象。
 // 已存在的配置文件无法读取或解析时，返回 nil 和 *CorruptConfigError，
@@ -68,18 +62,6 @@ func LoadAppConfig(appName string, defaultJSON []byte) (*Config, error) {
 	return load(path)
 }
 
-// newConfigFromDefaults 解析 defaultJSON 并构造 Config，不读写磁盘。
-// defaultJSON 解析失败时返回 nil 和错误。
-func newConfigFromDefaults(path string, defaultJSON []byte) (*Config, error) {
-	var defaults map[string]any
-	if err := json.Unmarshal(defaultJSON, &defaults); err != nil {
-		return nil, err
-	}
-	config := &Config{path: path, data: defaults, resolvedVersion: UnknownVersion}
-	config.declaredVersion = extractVersion(defaults)
-	return config, nil
-}
-
 // CorruptConfigError 表示已存在的配置文件无法读取或解析。
 // 调用方应用 errors.As 识别本错误，向用户报错并退出，不得静默改用默认值。
 type CorruptConfigError struct {
@@ -96,9 +78,6 @@ func (e *CorruptConfigError) Error() string {
 func (e *CorruptConfigError) Unwrap() error {
 	return e.Err
 }
-
-// errRepairNotImplemented 是预留修复接口的占位错误。
-var errRepairNotImplemented = errors.New("config repair is not implemented yet")
 
 // RepairAppConfig 修复 appName 对应的损坏配置文件。预留接口，尚未实现；
 // 未来版本将基于 defaultJSON 重建配置文件或引导用户修复。
@@ -318,3 +297,24 @@ func extractVersion(data map[string]any) string {
 	}
 	return v
 }
+
+// configDirMode 为 rwx------：仅属主可访问配置目录。
+const configDirMode = 0o700
+
+// configFileMode 为 rw-------：仅属主可读写，防止敏感配置泄露。
+const configFileMode = 0o600
+
+// newConfigFromDefaults 解析 defaultJSON 并构造 Config，不读写磁盘。
+// defaultJSON 解析失败时返回 nil 和错误。
+func newConfigFromDefaults(path string, defaultJSON []byte) (*Config, error) {
+	var defaults map[string]any
+	if err := json.Unmarshal(defaultJSON, &defaults); err != nil {
+		return nil, err
+	}
+	config := &Config{path: path, data: defaults, resolvedVersion: UnknownVersion}
+	config.declaredVersion = extractVersion(defaults)
+	return config, nil
+}
+
+// errRepairNotImplemented 是预留修复接口的占位错误。
+var errRepairNotImplemented = errors.New("config repair is not implemented yet")
