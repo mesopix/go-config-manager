@@ -607,8 +607,10 @@ func TestHandleCLI_ignoresNonConfigArgs(t *testing.T) {
 	}
 }
 
-// config 子命令分发：合法路径与各错误分支（表驱动）。
-// --edit 的真实行为在第 2 步实现，当前为预留桩，仅断言返回"未实现"错误。
+// config 子命令分发：错误分支（表驱动）。
+// --edit 的成功路径不在此外部测试中执行：编辑器启动函数是未导出注入点，
+// 外部包无法替换，真跑会启动真实编辑器；该路径由内部包 cli_test.go 用
+// 假编辑器覆盖（TestHandleCLI_editRoute）。
 func TestHandleCLI_dispatch(t *testing.T) {
 	useTempConfigDir(t)
 
@@ -622,7 +624,6 @@ func TestHandleCLI_dispatch(t *testing.T) {
 		{"unknown subcommand", []string{"config", "rebuild"}, true, "usage"},
 		{"--help is not implemented yet", []string{"config", "--help"}, true, "usage"},
 		{"edit with extra args", []string{"config", "--edit", "extra"}, true, "usage"},
-		{"edit stub", []string{"config", "--edit"}, true, "not implemented"},
 	}
 
 	for _, tt := range tests {

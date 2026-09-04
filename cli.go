@@ -1,8 +1,13 @@
 package configmanager
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -47,13 +52,83 @@ func HandleCLI(appName string, defaultJSON []byte, args []string) (bool, error) 
 	}
 }
 
-// errEditNotImplemented 是 --edit 的预留占位错误。
-// 编辑器启动与编辑后校验逻辑将在后续版本实现，预留方式同 RepairAppConfig。
-var errEditNotImplemented = errors.New("config edit is not implemented yet")
+// editLaunchEditor 启动编辑器打开配置文件并阻塞等待其退出。
+// 声明为包级变量，便于测试注入假编辑器；生产代码不要替换它。
+var editLaunchEditor = launchEditor
 
 // editConfig 打开 appName 的配置文件供手动编辑。
-// appName 与 defaultJSON 语义同 LoadAppConfig：文件缺失时需按默认模板创建。
-// 本版本为预留桩。
+// 文件缺失时先用 defaultJSON 按首运流程创建；文件已损坏时忽略
+// *CorruptConfigError——把坏文件交给用户手工修复正是本命令的用途，
+// 坏文件不被覆盖是库的设计契约。
+// 阻塞等待编辑器退出后重读文件，校验必须是 JSON 对象（与 {meta, fields}
+// 形状一致），非法时返回带解析细节的错误；合法时向标准输出打印一行确认。
 func editConfig(appName string, defaultJSON []byte) error {
-	return errEditNotImplemented
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(dir, appName, "config.json")
+
+	// 借用 LoadAppConfig 的首运创建流程：文件缺失时按模板创建目录与文件。
+	// 损坏文件返回的 *CorruptConfigError 是预期情况，吞掉后继续打开原始内容。
+	if _, err := LoadAppConfig(appName, defaultJSON); err != nil {
+		var corrupt *CorruptConfigError
+		if !errors.As(err, &corrupt) {
+			return err
+		}
+	}
+
+	// 阻塞等待用户编辑完成
+	if err := editLaunchEditor(path); err != nil {
+		return err
+	}
+
+	// 编辑器退出后重读并校验
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var object map[string]any
+	if err := json.Unmarshal(b, &object); err != nil {
+		return fmt.Errorf("edited config file %s is not a valid JSON object: %w", path, err)
+	}
+
+	fmt.Printf("config file edited: %s (JSON valid)\n", path)
+	return nil
+}
+
+// launchEditor 以阻塞方式启动编辑器打开 path，等待其退出。
+// 标准输入输出接到当前进程，保证终端编辑器（vim/nano 等）可用。
+// 注意：Linux 的 xdg-open 启动 GUI 程序后立即返回，无法真正阻塞；
+// 需要可靠的阻塞回退时，客户端应引导用户设置 $EDITOR。
+func launchEditor(path string) error {
+	program, editorArgs := resolveEditorCommand()
+	cmd := exec.Command(program, append(editorArgs, path)...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("launch editor %s: %w", program, err)
+	}
+	return nil
+}
+
+// resolveEditorCommand 返回编辑器命令的程序名与固定参数。
+// 优先级：$VISUAL → $EDITOR → 平台默认（windows: notepad / darwin: open -W /
+// 其他: xdg-open）。环境变量按空白拆分，支持 "code -w" 这类带参数的取值；
+// 只含空白视为未设置。
+func resolveEditorCommand() (string, []string) {
+	for _, key := range []string{"VISUAL", "EDITOR"} {
+		if fields := strings.Fields(os.Getenv(key)); len(fields) > 0 {
+			return fields[0], fields[1:]
+		}
+	}
+	switch runtime.GOOS {
+	case "windows":
+		return "notepad", nil
+	case "darwin":
+		return "open", []string{"-W"}
+	default:
+		return "xdg-open", nil
+	}
 }
