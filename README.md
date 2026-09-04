@@ -50,9 +50,9 @@ if err != nil {
     log.Fatal(err)
 }
 
-// appconfig.App now points to the same object — visible, tangible, and
+// appconfig.ConfigManager now points to the same object — visible, tangible, and
 // maintained by the library. Do not assign it; call Load() to (re)obtain it.
-_ = appconfig.App
+_ = appconfig.ConfigManager
 
 port, _ := c.Get("port")
 c.Set("port", 9090)
@@ -153,9 +153,10 @@ Full API documentation is available on [pkg.go.dev](https://pkg.go.dev/github.co
 
 ```
 .
-├── config.go           # Core library: LoadAppConfig, Config, Get/Set/Save,
+├── config.go           # Global assembly: Init/RegisterDefaults/Reset/Load,
+│                       # ConfigManager singleton; Config, Get/Set/Save,
 │                       # DecodeFields/SetFieldsFrom, Check/Normalize, Path,
-│                       # CorruptConfigError, RepairAppConfig (stub)
+│                       # CorruptConfigError, Repair (stub)
 ├── schema.go           # Schema types, Check, Normalize (standalone)
 ├── cli.go              # CLI takeover: HandleCLI dispatch, config --edit
 │                       # (editor launch + post-edit JSON validation)
@@ -179,16 +180,18 @@ go test -v ./...
 go vet ./...
 ```
 
-Tests use `t.TempDir()` and override `AppData` / `XDG_CONFIG_HOME` / `HOME` via `t.Setenv`, so they never touch real user config.
+Tests isolate themselves with `Reset()` + `Init` pointed at `t.TempDir()`, so they never touch real user config; only the lazy-assembly test overrides `AppData` / `XDG_CONFIG_HOME` / `HOME` via `t.Setenv`.
 
 ## Design Decisions
 
-- **No auto-detection of executable name**: Renaming the binary would silently create a new config file, losing previous settings. Test binaries would also use different config paths. Multiple binaries in the same project often share one config. The caller explicitly provides `appName`.
-- **Re-read after first save**: On first run, `LoadAppConfig` writes the embedded JSON defaults to disk then reads it back. This ensures numeric types are always `float64` (matching subsequent runs), avoiding subtle type mismatches between first and later launches.
-- **Corrupt files fail loudly**: When an existing config file cannot be read or parsed, `LoadAppConfig` returns `nil` and a `*CorruptConfigError` (carrying the file path and original error). It does NOT fall back to defaults — callers must surface the error to the user rather than silently continuing with stale defaults. The bad file is never overwritten; `RepairAppConfig` is reserved for future repair workflows.
+- **One process, one config, one object**: The package maintains `ConfigManager`, a `*Config` pointing at the process-wide singleton. `Load()` fills and returns it (idempotent); `Reset()` clears it. Assigning `ConfigManager` outside the library is forbidden by contract — the library cannot enforce it in Go, so tests rely on `Load()` always returning the same pointer.
+- **Executable name is the default subdirectory**: With no `Init`, the config lives under `<user config dir>/<executable name>/`. Renaming the binary therefore changes the default path — the old config "disappears" under the old name, and test binaries get their own namespace automatically. Pass an explicit `secondDir` via `Init` when a stable path matters. (This deliberately overturned the library's earlier "never auto-detect" contract.)
+- **Re-read after first save**: On first run, `Load` writes the registered template to disk then reads it back. This ensures numeric types are always `float64` (matching subsequent runs), avoiding subtle type mismatches between first and later launches.
+- **Corrupt files fail loudly**: When an existing config file cannot be read or parsed, `Load` returns `nil` and a `*CorruptConfigError` (carrying the file path and original error). It does NOT fall back to defaults — callers must surface the error to the user rather than silently continuing with stale defaults. The bad file is never overwritten; `Repair()` is reserved for future repair workflows.
+- **Assembly is guarded, instances are not**: `Init`/`RegisterDefaults`/`Reset`/`Load` serialize on a mutex; the `*Config` methods (`Get`/`Set`/`Save`/...) are not synchronized — callers sharing the singleton across goroutines must lock themselves.
 - **Atomic save**: `Save()` writes to a temp file in the same directory, calls `Sync()` to flush to disk, then `Rename`s over the target. A crash during save never leaves a half-written config.
-- **CLI takeover is opt-in per invocation**: `HandleCLI` only acts when `args[0]` is exactly `config`; otherwise the client's normal flow is untouched. `--edit` reuses the first-run creation flow for missing files and deliberately swallows `*CorruptConfigError` — opening the raw bad file for manual repair is that command's purpose. After the editor exits, the file must still be a JSON object or the command fails without touching the content.
-- **Zero dependencies**: Only stdlib (`encoding/json`, `os`, `os/exec`, `path/filepath`, `runtime`). Keeps the dependency tree minimal for a utility library.
+- **CLI takeover is opt-in per invocation**: `HandleCLI` only acts when `args[0]` is exactly `config`; otherwise the client's normal flow is untouched. `--edit` reuses the first-run creation flow for missing files and opens an existing corrupt file as-is — manual repair is that command's purpose. After the editor exits, the file must still be a JSON object or the command fails without touching the content.
+- **Zero dependencies**: Only stdlib (`encoding/json`, `os`, `os/exec`, `path/filepath`, `runtime`, `sync`). Keeps the dependency tree minimal for a utility library.
 
 ## Release Process
 
