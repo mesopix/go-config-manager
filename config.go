@@ -24,9 +24,12 @@ import (
 // defaultFileName 是配置文件名的缺省值。
 const defaultFileName = "config.json"
 
+// App 是 Load 成功后的进程内全局配置对象：首次 Load 成功后可用，Reset 时置空。
+// 它由库维护，请勿在库外赋值；需要获取时调用 Load()（幂等，总是返回同一对象）。
+var App *Config
+
 // 全局装配状态。cfgInited/cfgBaseDir/cfgSubDir/cfgFileName/cfgTemplate 记录
-// 显式装配结果，singleton 是 Load 成功后的进程内单例。
-// 所有导出装配函数经 globalMu 串行化；未导出辅助函数由调用方持锁。
+// 显式装配结果。所有导出装配函数经 globalMu 串行化；未导出辅助函数由调用方持锁。
 var (
 	globalMu    sync.Mutex
 	cfgInited   bool   // Init 是否已成功调用
@@ -34,7 +37,6 @@ var (
 	cfgSubDir   string // Init 装配的二级目录；未装配时为空
 	cfgFileName string // Init 装配的文件名；未装配时为空
 	cfgTemplate []byte // RegisterDefaults 注册并校验过的首运模板；nil 表示未注册
-	singleton   *Config
 )
 
 // Init 装配全局配置的存储路径，仅能在 Load 之前成功调用一次。
@@ -49,7 +51,7 @@ var (
 func Init(firstDir, secondDir, fileName string) error {
 	globalMu.Lock()
 	defer globalMu.Unlock()
-	if cfgInited || singleton != nil {
+	if cfgInited || App != nil {
 		return errors.New("appconfig: Init must be called only once; call Reset first to re-assemble")
 	}
 	if firstDir == "" {
@@ -129,7 +131,7 @@ func Reset() {
 	cfgInited = false
 	cfgBaseDir, cfgSubDir, cfgFileName = "", "", ""
 	cfgTemplate = nil
-	singleton = nil
+	App = nil
 }
 
 // configPath 返回配置文件完整路径，不做磁盘操作。调用方需持有 globalMu。
@@ -148,17 +150,17 @@ func configPath() (string, error) {
 	return filepath.Join(base, sub, name), nil
 }
 
-// Load 返回全局配置对象（进程内单例）。首次调用完成路径装配并加载：
-// 文件不存在且已注册模板时按首运流程创建，并从磁盘重读（保证数值类型
-// 与后续运行一致）；文件存在但无法读取或解析时返回 nil 和
-// *CorruptConfigError，不提供默认值降级，也不覆盖磁盘上的坏文件；
+// Load 返回全局配置对象（进程内单例），并把它填充到导出的 App。
+// 首次调用完成路径装配并加载：文件不存在且已注册模板时按首运流程创建，
+// 并从磁盘重读（保证数值类型与后续运行一致）；文件存在但无法读取或解析时
+// 返回 nil 和 *CorruptConfigError，不提供默认值降级，也不覆盖磁盘上的坏文件；
 // 文件不存在且未注册模板时返回错误。后续调用返回同一对象。
 // 未调用 Init 时按全缺省值装配（用户配置目录 + 可执行文件名 + config.json）。
 func Load() (*Config, error) {
 	globalMu.Lock()
 	defer globalMu.Unlock()
-	if singleton != nil {
-		return singleton, nil
+	if App != nil {
+		return App, nil
 	}
 	path, err := configPath()
 	if err != nil {
@@ -166,8 +168,8 @@ func Load() (*Config, error) {
 	}
 	loaded, err := load(path)
 	if err == nil {
-		singleton = loaded
-		return singleton, nil
+		App = loaded
+		return App, nil
 	}
 	if !os.IsNotExist(err) {
 		return nil, &CorruptConfigError{Path: path, Err: err}
@@ -176,11 +178,11 @@ func Load() (*Config, error) {
 	if _, err := createFromDefaults(path); err != nil {
 		return nil, err
 	}
-	singleton, err = load(path)
+	App, err = load(path)
 	if err != nil {
 		return nil, err
 	}
-	return singleton, nil
+	return App, nil
 }
 
 // createFromDefaults 在 path 处按已注册模板创建配置文件（含目录）。

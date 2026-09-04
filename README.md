@@ -20,13 +20,25 @@ import "github.com/mesopix/go-config-manager"
 
 ## Usage
 
-Create a `default_config.json` template file and embed it:
+The package holds one process-wide config. Assemble it once at startup, then use the singleton returned by `Load`:
 
 ```go
 //go:embed default_config.json
 var defaultConfigJSON []byte
 
-c, err := appconfig.LoadAppConfig("myapp", defaultConfigJSON)
+// Optional: assemble the storage path. Empty arguments fall back to defaults
+// (<user config dir> / executable name / config.json).
+if err := appconfig.Init("", "myapp", ""); err != nil {
+    log.Fatal(err)
+}
+
+// Optional: register the first-run template (validated immediately,
+// must be a JSON object).
+if err := appconfig.RegisterDefaults(defaultConfigJSON); err != nil {
+    log.Fatal(err)
+}
+
+c, err := appconfig.Load() // process-wide singleton; later calls return the same *Config
 if err != nil {
     // 配置文件损坏时返回 *CorruptConfigError，不提供默认值降级；
     // 调用方应打印错误并退出，或引导用户修复。
@@ -38,12 +50,28 @@ if err != nil {
     log.Fatal(err)
 }
 
+// appconfig.App now points to the same object — visible, tangible, and
+// maintained by the library. Do not assign it; call Load() to (re)obtain it.
+_ = appconfig.App
+
 port, _ := c.Get("port")
 c.Set("port", 9090)
 if err := c.Save(); err != nil { ... }
 ```
 
-The file lives at `<user config dir>/myapp/config.json`; on first run it is created from the embedded JSON template. `c.Path()` returns the absolute path (useful for editor integrations or error messages).
+With no `Init` call the path defaults to `<user config dir>/<executable name>/config.json`; on first run the file is created from the registered template. `c.Path()` returns the absolute path (useful for editor integrations or error messages).
+
+Path assembly rules (`Init`):
+
+| argument | meaning | default |
+|---|---|---|
+| `firstDir` | level-1 directory, absolute path | `os.UserConfigDir()` |
+| `secondDir` | level-2 name, may contain separators to nest | executable name without extension |
+| `fileName` | config file name | `config.json` |
+
+`firstDir` must be an absolute path; `secondDir` must be relative and must not climb out of `firstDir` (`..` is rejected); `fileName` must be a plain file name. `Init` and `RegisterDefaults` may each succeed only once — repeats return an error; `Reset()` clears the assembly and the singleton and is intended for tests.
+
+If the config file does not exist and no template was registered, `Load` returns an error instead of silently creating an empty config.
 
 Note: JSON numbers come back as `float64` from `Get`.
 
@@ -89,10 +117,10 @@ case appconfig.Invalid:
 
 ### CLI integration
 
-`HandleCLI` lets your binary handle a `config` subcommand. Call it with `os.Args[1:]` before your normal flow; when the first argument is `config`, the library takes over that argument and everything after it:
+`HandleCLI` lets your binary handle a `config` subcommand. Call it with `os.Args[1:]` before your normal flow (after `Init`/`RegisterDefaults` if you assemble explicitly — the CLI reads the same global assembly); when the first argument is `config`, the library takes over that argument and everything after it:
 
 ```go
-if handled, err := appconfig.HandleCLI("myapp", defaultConfigJSON, os.Args[1:]); handled {
+if handled, err := appconfig.HandleCLI(os.Args[1:]); handled {
     if err != nil {
         fmt.Fprintln(os.Stderr, err) // usage is embedded in the error
         os.Exit(1)
@@ -111,7 +139,7 @@ Anything else after `config` (including a bare `config`) returns `handled = true
 
 ### Repair (not yet implemented)
 
-`RepairAppConfig(appName, defaultJSON)` is reserved for future versions. It currently returns an error indicating the feature is not implemented.
+`Repair()` is reserved for future versions. It currently returns an error indicating the feature is not implemented.
 
 ## API Reference
 

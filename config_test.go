@@ -143,7 +143,7 @@ func TestLoad_missingFileWithoutTemplate(t *testing.T) {
 	}
 }
 
-// Load 是进程内单例：后续调用返回同一对象。
+// Load 是进程内单例：后续调用返回同一对象，并填充导出的全局 App。
 func TestLoad_returnsSingleton(t *testing.T) {
 	c := newTestConfig(t, []byte(`{"meta": {}, "fields": {"key": "value"}}`))
 
@@ -153,6 +153,18 @@ func TestLoad_returnsSingleton(t *testing.T) {
 	}
 	if c2 != c {
 		t.Error("Load should return the same singleton instance")
+	}
+	if App != c {
+		t.Error("App should point to the loaded singleton")
+	}
+
+	// Reset 后 App 归零，允许重新装配
+	Reset()
+	if App != nil {
+		t.Error("App should be nil after Reset")
+	}
+	if err := Init(t.TempDir(), "app", "config.json"); err != nil {
+		t.Fatalf("Init after Reset: %v", err)
 	}
 }
 
