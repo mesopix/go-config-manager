@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `go-config-manager` is a zero-dependency Go library for per-app JSON configuration storage. Config files live at `<os.UserConfigDir>/<appName>/config.json`. The library handles first-run creation from an embedded JSON template, atomic saves, and type-safe access via `Get`/`Set`.
 
-Module path: `github.com/mesopix/go-config-manager` — single package `configmanager` at module root.
+Module path: `github.com/mesopix/go-config-manager` — single package `appconfig` at module root.
 
 ## Commands
 
@@ -47,7 +47,7 @@ No Makefile, no linter config, no formatter config. Only stdlib dependencies (`e
 
 ## Testing Conventions
 
-- **Two test packages, three test files**: `config_test.go` and `cli_test.go` (internal, package `configmanager`) test unexported functions like `load()` and `editConfig()`. `api_test.go` (external, package `configmanager_test`) tests only the public API. This separation is intentional.
+- **Two test packages, four test files**: `config_test.go`, `schema_test.go`, and `cli_test.go` (internal, package `appconfig`) test unexported functions like `load()` and `editConfig()`. `api_test.go` (external, package `appconfig_test`) tests only the public API. This separation is intentional.
 - **Fake editor injection**: `cli_test.go` swaps the unexported package variable `editLaunchEditor` via the `useFakeEditor(t, fake)` helper (restored with `t.Cleanup`) so `--edit` is tested without launching a real editor. External tests never trigger the `--edit` success path — they cannot inject and would launch a real editor.
 - **Test isolation**: The internal test files share one `useTempConfigDir(t)` helper (defined in `config_test.go`); `api_test.go` defines its own copy since external packages cannot access it. The helper overrides `AppData`, `XDG_CONFIG_HOME`, and `HOME` via `t.Setenv`. Tests never touch real user config directories.
 - **Table-driven tests**: Used for negative/error cases (see `TestLoad_invalidJSON`).

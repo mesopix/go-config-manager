@@ -1,4 +1,4 @@
-// 命令 demo 演示其他项目如何使用 configmanager。
+// 命令 demo 演示其他项目如何使用 appconfig。
 package main
 
 import (
@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	configmanager "github.com/mesopix/go-config-manager"
+	appconfig "github.com/mesopix/go-config-manager"
 )
 
 // defaultConfigJSON 为嵌入的默认配置模板，首次运行时用于创建配置文件。
@@ -38,7 +38,7 @@ func exeName(arg0 string) string {
 func main() {
 	// CLI 接管：第一个参数是 config 时，该参数及其后的所有参数交给库处理，
 	// 处理完毕直接结束进程，不进入正常业务流程。
-	if handled, err := configmanager.HandleCLI(exeName(os.Args[0]), defaultConfigJSON, os.Args[1:]); handled {
+	if handled, err := appconfig.HandleCLI(exeName(os.Args[0]), defaultConfigJSON, os.Args[1:]); handled {
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -48,7 +48,7 @@ func main() {
 
 	// 总会返回一个配置：首次运行从嵌入的 JSON 模板创建，之后从磁盘加载。
 	// 配置文件位于用户配置目录下。
-	c, err := configmanager.LoadAppConfig(exeName(os.Args[0]), defaultConfigJSON)
+	c, err := appconfig.LoadAppConfig(exeName(os.Args[0]), defaultConfigJSON)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -59,11 +59,11 @@ func main() {
 	fmt.Printf("name=%v port=%v debug=%v\n", name, port, debug)
 
 	// 从嵌入的 JSON 解析 schema（含 meta）
-	sf, err := configmanager.ParseSchemaFile(embeddedSchemaJSON)
+	sf, err := appconfig.ParseSchemaFile(embeddedSchemaJSON)
 	if err != nil {
 		log.Fatalf("parse embedded schema: %v", err)
 	}
-	schema := configmanager.Schema(sf.Fields)
+	schema := appconfig.Schema(sf.Fields)
 	fmt.Printf("schema version: %s\n", sf.Meta.Version)
 
 	// 提取当前配置数据用于检查
@@ -79,7 +79,7 @@ func main() {
 
 	// 如果可校正，则 Normalize 并写回磁盘
 	switch result {
-	case configmanager.MissingDefaults, configmanager.ExtraFields, configmanager.MissingAndExtra:
+	case appconfig.MissingDefaults, appconfig.ExtraFields, appconfig.MissingAndExtra:
 		normalized, err := schema.Normalize(data)
 		if err != nil {
 			log.Fatal(err)

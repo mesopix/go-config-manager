@@ -1,4 +1,4 @@
-package configmanager_test
+package appconfig_test
 
 import (
 	"bytes"
@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	configmanager "github.com/mesopix/go-config-manager"
+	appconfig "github.com/mesopix/go-config-manager"
 )
 
 // useTempConfigDir 将 os.UserConfigDir 指向临时目录。
@@ -28,7 +28,7 @@ func TestLoadAppConfigCreatesFromTemplate(t *testing.T) {
 	useTempConfigDir(t)
 
 	defaultJSON := []byte(`{"meta": {}, "fields": {"name": "demo", "port": 8080}}`)
-	c, err := configmanager.LoadAppConfig("myapp", defaultJSON)
+	c, err := appconfig.LoadAppConfig("myapp", defaultJSON)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestLoadAppConfigCreatesFromTemplate(t *testing.T) {
 	if err := c.Save(); err != nil {
 		t.Fatal(err)
 	}
-	c2, err := configmanager.LoadAppConfig("myapp", defaultJSON)
+	c2, err := appconfig.LoadAppConfig("myapp", defaultJSON)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestLoadAppConfigNumbersAreFloat64(t *testing.T) {
 
 	defaultJSON := []byte(`{"meta": {}, "fields": {"port": 8080}}`)
 
-	c, err := configmanager.LoadAppConfig("myapp", defaultJSON)
+	c, err := appconfig.LoadAppConfig("myapp", defaultJSON)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestLoadAppConfigNumbersAreFloat64(t *testing.T) {
 		t.Fatalf("first run: port is %T, want float64", port)
 	}
 
-	c2, err := configmanager.LoadAppConfig("myapp", defaultJSON)
+	c2, err := appconfig.LoadAppConfig("myapp", defaultJSON)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestLoadAppConfig_invalidDefaultJSON(t *testing.T) {
 	useTempConfigDir(t)
 
 	invalidJSON := []byte(`{not valid json}`)
-	_, err := configmanager.LoadAppConfig("badapp", invalidJSON)
+	_, err := appconfig.LoadAppConfig("badapp", invalidJSON)
 	if err == nil {
 		t.Fatal("LoadAppConfig with invalid defaultJSON: expected error, got nil")
 	}
@@ -106,7 +106,7 @@ func TestLoadAppConfig_autoCreatesWhenMissing(t *testing.T) {
 	useTempConfigDir(t)
 
 	defaultJSON := []byte(`{"meta": {}, "fields": {"host": "localhost", "port": 3000}}`)
-	c, err := configmanager.LoadAppConfig("newapp", defaultJSON)
+	c, err := appconfig.LoadAppConfig("newapp", defaultJSON)
 	if err != nil {
 		t.Fatalf("first LoadAppConfig: unexpected error: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestLoadAppConfig_saveLoadRoundTrip(t *testing.T) {
 	useTempConfigDir(t)
 
 	defaultJSON := []byte(`{"meta": {}, "fields": {"key": "original"}}`)
-	c, err := configmanager.LoadAppConfig("roundtrip", defaultJSON)
+	c, err := appconfig.LoadAppConfig("roundtrip", defaultJSON)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestLoadAppConfig_saveLoadRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c2, err := configmanager.LoadAppConfig("roundtrip", defaultJSON)
+	c2, err := appconfig.LoadAppConfig("roundtrip", defaultJSON)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestLoadAppConfig_secondLoadIgnoresDefaults(t *testing.T) {
 	useTempConfigDir(t)
 
 	defaultJSON := []byte(`{"meta": {}, "fields": {"color": "red"}}`)
-	c, err := configmanager.LoadAppConfig("overwrite", defaultJSON)
+	c, err := appconfig.LoadAppConfig("overwrite", defaultJSON)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestLoadAppConfig_secondLoadIgnoresDefaults(t *testing.T) {
 
 	// 用不同的默认值再次加载，应读到磁盘上的 "blue" 而非新默认的 "green"。
 	newDefaultJSON := []byte(`{"meta": {}, "fields": {"color": "green"}}`)
-	c2, err := configmanager.LoadAppConfig("overwrite", newDefaultJSON)
+	c2, err := appconfig.LoadAppConfig("overwrite", newDefaultJSON)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +185,7 @@ func TestLoadAppConfig_getMissingKey(t *testing.T) {
 	useTempConfigDir(t)
 
 	defaultJSON := []byte(`{"meta": {}, "fields": {"exists": true}}`)
-	c, err := configmanager.LoadAppConfig("missingkey", defaultJSON)
+	c, err := appconfig.LoadAppConfig("missingkey", defaultJSON)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,14 +205,14 @@ func TestSchema_checkWithConfig(t *testing.T) {
 	useTempConfigDir(t)
 
 	defaultJSON := []byte(`{"meta": {}, "fields": {"host": "localhost", "port": 8080}}`)
-	c, err := configmanager.LoadAppConfig("schematest", defaultJSON)
+	c, err := appconfig.LoadAppConfig("schematest", defaultJSON)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	schema := configmanager.Schema{
-		"host": {Type: configmanager.TypeString, Required: true},
-		"port": {Type: configmanager.TypeFloat, Required: true},
+	schema := appconfig.Schema{
+		"host": {Type: appconfig.TypeString, Required: true},
+		"port": {Type: appconfig.TypeFloat, Required: true},
 	}
 
 	// 从 Config 提取 data 用于 Check
@@ -223,7 +223,7 @@ func TestSchema_checkWithConfig(t *testing.T) {
 		}
 	}
 
-	if got := schema.Check(data); got != configmanager.Valid {
+	if got := schema.Check(data); got != appconfig.Valid {
 		t.Errorf("Check = %d, want Valid", got)
 	}
 }
@@ -235,14 +235,14 @@ func TestSchema_normalizeAndSaveBack(t *testing.T) {
 
 	// 首次加载只有 host，缺少 port
 	defaultJSON := []byte(`{"meta": {}, "fields": {"host": "localhost"}}`)
-	c, err := configmanager.LoadAppConfig("normtest", defaultJSON)
+	c, err := appconfig.LoadAppConfig("normtest", defaultJSON)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	schema := configmanager.Schema{
-		"host": {Type: configmanager.TypeString, Required: true},
-		"port": {Type: configmanager.TypeFloat, Default: float64(3000)},
+	schema := appconfig.Schema{
+		"host": {Type: appconfig.TypeString, Required: true},
+		"port": {Type: appconfig.TypeFloat, Default: float64(3000)},
 	}
 
 	// 提取当前 data
@@ -252,7 +252,7 @@ func TestSchema_normalizeAndSaveBack(t *testing.T) {
 	}
 
 	// Check 应为 MissingDefaults
-	if got := schema.Check(data); got != configmanager.MissingDefaults {
+	if got := schema.Check(data); got != appconfig.MissingDefaults {
 		t.Fatalf("Check = %d, want MissingDefaults", got)
 	}
 
@@ -271,7 +271,7 @@ func TestSchema_normalizeAndSaveBack(t *testing.T) {
 	}
 
 	// 重新加载验证 port 已持久化
-	c2, err := configmanager.LoadAppConfig("normtest", defaultJSON)
+	c2, err := appconfig.LoadAppConfig("normtest", defaultJSON)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +290,7 @@ func TestLoadAppConfig_corruptFileReturnsTypedError(t *testing.T) {
 	defaultJSON := []byte(`{"meta": {"version": "1"}, "fields": {"color": "red"}}`)
 
 	// 先正常创建配置文件
-	if _, err := configmanager.LoadAppConfig("corruptapp", defaultJSON); err != nil {
+	if _, err := appconfig.LoadAppConfig("corruptapp", defaultJSON); err != nil {
 		t.Fatal(err)
 	}
 
@@ -306,7 +306,7 @@ func TestLoadAppConfig_corruptFileReturnsTypedError(t *testing.T) {
 	}
 
 	// 应返回错误和 nil 配置，杜绝调用方拿默认值静默继续
-	c, err := configmanager.LoadAppConfig("corruptapp", defaultJSON)
+	c, err := appconfig.LoadAppConfig("corruptapp", defaultJSON)
 	if err == nil {
 		t.Fatal("LoadAppConfig with corrupt file: expected error, got nil")
 	}
@@ -315,7 +315,7 @@ func TestLoadAppConfig_corruptFileReturnsTypedError(t *testing.T) {
 	}
 
 	// 错误可通过 errors.As 识别为 CorruptConfigError，且携带正确路径
-	var corruptErr *configmanager.CorruptConfigError
+	var corruptErr *appconfig.CorruptConfigError
 	if !errors.As(err, &corruptErr) {
 		t.Fatalf("error type = %T, want *CorruptConfigError", err)
 	}
@@ -339,7 +339,7 @@ func TestLoadAppConfig_corruptFileReturnsTypedError(t *testing.T) {
 func TestRepairAppConfig_notImplementedYet(t *testing.T) {
 	useTempConfigDir(t)
 
-	err := configmanager.RepairAppConfig("anyapp", []byte(`{"meta": {}, "fields": {}}`))
+	err := appconfig.RepairAppConfig("anyapp", []byte(`{"meta": {}, "fields": {}}`))
 	if err == nil {
 		t.Fatal("RepairAppConfig: expected error, got nil")
 	}
@@ -361,7 +361,7 @@ func TestStructBinding_roundTrip(t *testing.T) {
 	useTempConfigDir(t)
 
 	defaultJSON := []byte(`{"meta": {}, "fields": {"name": "demo", "port": 8080}}`)
-	c, err := configmanager.LoadAppConfig("binding", defaultJSON)
+	c, err := appconfig.LoadAppConfig("binding", defaultJSON)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -380,7 +380,7 @@ func TestStructBinding_roundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c2, err := configmanager.LoadAppConfig("binding", defaultJSON)
+	c2, err := appconfig.LoadAppConfig("binding", defaultJSON)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -404,7 +404,7 @@ func TestStructBinding_missingKeysAndNilPointer(t *testing.T) {
 	useTempConfigDir(t)
 
 	defaultJSON := []byte(`{"meta": {}, "fields": {"name": "only-name"}}`)
-	c, err := configmanager.LoadAppConfig("partial", defaultJSON)
+	c, err := appconfig.LoadAppConfig("partial", defaultJSON)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -430,7 +430,7 @@ func TestStructBinding_explicitZeroVsMissing(t *testing.T) {
 
 	// optional 显式为 null（JSON null 解码到 *string 为 nil）——用空串更直观
 	defaultJSON := []byte(`{"meta": {}, "fields": {"optional": ""}}`)
-	c, err := configmanager.LoadAppConfig("explicit", defaultJSON)
+	c, err := appconfig.LoadAppConfig("explicit", defaultJSON)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -451,7 +451,7 @@ func TestStructBinding_setFieldsFromRejectsInvalid(t *testing.T) {
 	useTempConfigDir(t)
 
 	defaultJSON := []byte(`{"meta": {}, "fields": {}}`)
-	c, err := configmanager.LoadAppConfig("reject", defaultJSON)
+	c, err := appconfig.LoadAppConfig("reject", defaultJSON)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -472,16 +472,16 @@ func TestConfig_checkDirectlyOnFields(t *testing.T) {
 	useTempConfigDir(t)
 
 	defaultJSON := []byte(`{"meta": {}, "fields": {"host": "localhost", "port": 8080}}`)
-	c, err := configmanager.LoadAppConfig("cfgcheck", defaultJSON)
+	c, err := appconfig.LoadAppConfig("cfgcheck", defaultJSON)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	schema := configmanager.Schema{
-		"host": {Type: configmanager.TypeString, Required: true},
-		"port": {Type: configmanager.TypeFloat, Required: true},
+	schema := appconfig.Schema{
+		"host": {Type: appconfig.TypeString, Required: true},
+		"port": {Type: appconfig.TypeFloat, Required: true},
 	}
-	if got := c.Check(schema); got != configmanager.Valid {
+	if got := c.Check(schema); got != appconfig.Valid {
 		t.Errorf("Check = %d, want Valid", got)
 	}
 }
@@ -491,13 +491,13 @@ func TestConfig_normalizeValidIsNoop(t *testing.T) {
 	useTempConfigDir(t)
 
 	defaultJSON := []byte(`{"meta": {}, "fields": {"key": "value"}}`)
-	c, err := configmanager.LoadAppConfig("noopnorm", defaultJSON)
+	c, err := appconfig.LoadAppConfig("noopnorm", defaultJSON)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	schema := configmanager.Schema{
-		"key": {Type: configmanager.TypeString, Required: true},
+	schema := appconfig.Schema{
+		"key": {Type: appconfig.TypeString, Required: true},
 	}
 	if err := c.Normalize(schema); err != nil {
 		t.Fatalf("Normalize on Valid data: unexpected error: %v", err)
@@ -512,16 +512,16 @@ func TestConfig_normalizeFillsDefaultsAndWritesBack(t *testing.T) {
 	useTempConfigDir(t)
 
 	defaultJSON := []byte(`{"meta": {}, "fields": {"host": "localhost"}}`)
-	c, err := configmanager.LoadAppConfig("normfill", defaultJSON)
+	c, err := appconfig.LoadAppConfig("normfill", defaultJSON)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	schema := configmanager.Schema{
-		"host": {Type: configmanager.TypeString, Required: true},
-		"port": {Type: configmanager.TypeFloat, Default: float64(3000)},
+	schema := appconfig.Schema{
+		"host": {Type: appconfig.TypeString, Required: true},
+		"port": {Type: appconfig.TypeFloat, Default: float64(3000)},
 	}
-	if got := c.Check(schema); got != configmanager.MissingDefaults {
+	if got := c.Check(schema); got != appconfig.MissingDefaults {
 		t.Fatalf("before normalize: Check = %d, want MissingDefaults", got)
 	}
 	if err := c.Normalize(schema); err != nil {
@@ -537,15 +537,15 @@ func TestConfig_normalizeRemovesExtraFields(t *testing.T) {
 	useTempConfigDir(t)
 
 	defaultJSON := []byte(`{"meta": {}, "fields": {"host": "localhost", "extra": "junk"}}`)
-	c, err := configmanager.LoadAppConfig("normextra", defaultJSON)
+	c, err := appconfig.LoadAppConfig("normextra", defaultJSON)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	schema := configmanager.Schema{
-		"host": {Type: configmanager.TypeString, Required: true},
+	schema := appconfig.Schema{
+		"host": {Type: appconfig.TypeString, Required: true},
 	}
-	if got := c.Check(schema); got != configmanager.ExtraFields {
+	if got := c.Check(schema); got != appconfig.ExtraFields {
 		t.Fatalf("before normalize: Check = %d, want ExtraFields", got)
 	}
 	if err := c.Normalize(schema); err != nil {
@@ -564,15 +564,15 @@ func TestConfig_normalizeInvalidReturnsError(t *testing.T) {
 	useTempConfigDir(t)
 
 	defaultJSON := []byte(`{"meta": {}, "fields": {"port": "not-a-number"}}`)
-	c, err := configmanager.LoadAppConfig("norminvalid", defaultJSON)
+	c, err := appconfig.LoadAppConfig("norminvalid", defaultJSON)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	schema := configmanager.Schema{
-		"port": {Type: configmanager.TypeFloat, Required: true},
+	schema := appconfig.Schema{
+		"port": {Type: appconfig.TypeFloat, Required: true},
 	}
-	if got := c.Check(schema); got != configmanager.Invalid {
+	if got := c.Check(schema); got != appconfig.Invalid {
 		t.Fatalf("before normalize: Check = %d, want Invalid", got)
 	}
 	if err := c.Normalize(schema); err == nil {
@@ -597,7 +597,7 @@ func TestHandleCLI_ignoresNonConfigArgs(t *testing.T) {
 		{"Config"},                // 大小写敏感，不接管
 		{"config.json", "--edit"}, // 子命令必须完整等于 config
 	} {
-		handled, err := configmanager.HandleCLI("myapp", []byte(`{}`), args)
+		handled, err := appconfig.HandleCLI("myapp", []byte(`{}`), args)
 		if handled {
 			t.Errorf("HandleCLI(%q): handled = true, want false", args)
 		}
@@ -628,7 +628,7 @@ func TestHandleCLI_dispatch(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.label, func(t *testing.T) {
-			handled, err := configmanager.HandleCLI("myapp", []byte(`{}`), tt.args)
+			handled, err := appconfig.HandleCLI("myapp", []byte(`{}`), tt.args)
 			if !handled {
 				t.Fatalf("handled = false, want true")
 			}

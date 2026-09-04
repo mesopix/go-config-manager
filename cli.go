@@ -1,4 +1,4 @@
-package configmanager
+package appconfig
 
 import (
 	"encoding/json"
@@ -36,19 +36,19 @@ func HandleCLI(appName string, defaultJSON []byte, args []string) (bool, error) 
 
 	// config 后没有子命令
 	if len(args) == 1 {
-		return true, fmt.Errorf("configmanager: missing config subcommand\n\n%s", cliUsage)
+		return true, fmt.Errorf("appconfig: missing config subcommand\n\n%s", cliUsage)
 	}
 
 	switch args[1] {
 	case "--edit":
 		// --edit 不接受额外参数，避免歧义
 		if len(args) > 2 {
-			return true, fmt.Errorf("configmanager: unexpected arguments after --edit: %s\n\n%s",
+			return true, fmt.Errorf("appconfig: unexpected arguments after --edit: %s\n\n%s",
 				strings.Join(args[2:], " "), cliUsage)
 		}
 		return true, editConfig(appName, defaultJSON)
 	default:
-		return true, fmt.Errorf("configmanager: unknown config subcommand %q\n\n%s", args[1], cliUsage)
+		return true, fmt.Errorf("appconfig: unknown config subcommand %q\n\n%s", args[1], cliUsage)
 	}
 }
 

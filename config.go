@@ -1,5 +1,5 @@
-// 包 configmanager 是一个基于 JSON 文件的轻量级配置存储库。
-package configmanager
+// 包 appconfig 是一个基于 JSON 文件的轻量级配置存储库。
+package appconfig
 
 import (
 	"encoding/json"
@@ -224,7 +224,7 @@ func (c *Config) DecodeFields(target any) error {
 // source 为 nil 或无法编码为 JSON 对象时返回错误。
 func (c *Config) SetFieldsFrom(source any) error {
 	if source == nil {
-		return errors.New("configmanager: SetFieldsFrom source must not be nil")
+		return errors.New("appconfig: SetFieldsFrom source must not be nil")
 	}
 	encoded, err := json.Marshal(source)
 	if err != nil {
@@ -235,7 +235,7 @@ func (c *Config) SetFieldsFrom(source any) error {
 		return err
 	}
 	if fields == nil {
-		return errors.New("configmanager: SetFieldsFrom source must encode to a JSON object")
+		return errors.New("appconfig: SetFieldsFrom source must encode to a JSON object")
 	}
 	c.data["fields"] = fields
 	return nil

@@ -1,4 +1,4 @@
-package configmanager
+package appconfig
 
 import (
 	"errors"

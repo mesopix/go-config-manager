@@ -1,4 +1,4 @@
-package configmanager
+package appconfig
 
 import (
 	"encoding/json"
@@ -34,8 +34,8 @@ type SchemaMeta struct {
 
 // SchemaFile 是 schema.json 的顶层结构，将元数据与字段定义分组。
 type SchemaFile struct {
-	Meta   SchemaMeta            `json:"meta"`
-	Fields map[string]FieldDef   `json:"fields"`
+	Meta   SchemaMeta          `json:"meta"`
+	Fields map[string]FieldDef `json:"fields"`
 }
 
 // ParseSchema 从 JSON 字节中解析出 Schema（仅提取 fields 部分）。
@@ -61,11 +61,11 @@ func ParseSchemaFile(data []byte) (*SchemaFile, error) {
 type CheckResult int
 
 const (
-	Valid             CheckResult = iota // 严格符合 schema
-	MissingDefaults                      // 仅缺少带默认值的非必填字段
-	ExtraFields                          // 仅有 schema 未定义的多余字段
-	MissingAndExtra                      // 既缺带默认值的字段，又有多余字段
-	Invalid                              // 必填缺失或类型不匹配
+	Valid           CheckResult = iota // 严格符合 schema
+	MissingDefaults                    // 仅缺少带默认值的非必填字段
+	ExtraFields                        // 仅有 schema 未定义的多余字段
+	MissingAndExtra                    // 既缺带默认值的字段，又有多余字段
+	Invalid                            // 必填缺失或类型不匹配
 )
 
 // Check 只读检查 data 相对于 schema 的状态，不修改 data。

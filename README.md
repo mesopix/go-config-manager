@@ -26,11 +26,11 @@ Create a `default_config.json` template file and embed it:
 //go:embed default_config.json
 var defaultConfigJSON []byte
 
-c, err := configmanager.LoadAppConfig("myapp", defaultConfigJSON)
+c, err := appconfig.LoadAppConfig("myapp", defaultConfigJSON)
 if err != nil {
     // 配置文件损坏时返回 *CorruptConfigError，不提供默认值降级；
     // 调用方应打印错误并退出，或引导用户修复。
-    var corruptErr *configmanager.CorruptConfigError
+    var corruptErr *appconfig.CorruptConfigError
     if errors.As(err, &corruptErr) {
         fmt.Fprintf(os.Stderr, "config file %s is corrupt: %v\n", corruptErr.Path, corruptErr.Err)
         os.Exit(1)
@@ -69,18 +69,18 @@ Missing keys leave target fields at their zero value; pointer fields stay `nil` 
 ### Schema validation
 
 ```go
-schema := configmanager.Schema{
-    "host": {Type: configmanager.TypeString, Required: true},
-    "port": {Type: configmanager.TypeFloat, Default: float64(3000)},
+schema := appconfig.Schema{
+    "host": {Type: appconfig.TypeString, Required: true},
+    "port": {Type: appconfig.TypeFloat, Default: float64(3000)},
 }
 
 switch c.Check(schema) {
-case configmanager.Valid:
+case appconfig.Valid:
     // nothing to do
-case configmanager.MissingDefaults, configmanager.ExtraFields, configmanager.MissingAndExtra:
+case appconfig.MissingDefaults, appconfig.ExtraFields, appconfig.MissingAndExtra:
     if err := c.Normalize(schema); err != nil { ... }
     if err := c.Save(); err != nil { ... }
-case configmanager.Invalid:
+case appconfig.Invalid:
     log.Fatal("required field missing or type mismatch")
 }
 ```
@@ -92,7 +92,7 @@ case configmanager.Invalid:
 `HandleCLI` lets your binary handle a `config` subcommand. Call it with `os.Args[1:]` before your normal flow; when the first argument is `config`, the library takes over that argument and everything after it:
 
 ```go
-if handled, err := configmanager.HandleCLI("myapp", defaultConfigJSON, os.Args[1:]); handled {
+if handled, err := appconfig.HandleCLI("myapp", defaultConfigJSON, os.Args[1:]); handled {
     if err != nil {
         fmt.Fprintln(os.Stderr, err) // usage is embedded in the error
         os.Exit(1)
