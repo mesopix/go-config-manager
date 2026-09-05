@@ -9,57 +9,45 @@ import (
 	"testing"
 )
 
-// newTestStore 在独立临时目录装配全局状态（不加载）。
-// defaultJSON 为 nil 表示不注册模板；测试结束自动 Reset。
-func newTestStore(t *testing.T, defaultJSON []byte) {
+// newTestManager 在独立临时目录装配一个全新 Manager（不加载），
+// 并返回它与期望的配置文件路径。defaultJSON 为 nil 表示不注册模板；
+// 每个用例各自持有实例，无需全局清理。
+func newTestManager(t *testing.T, defaultJSON []byte) (*Manager, string) {
 	t.Helper()
-	Reset()
-	t.Cleanup(Reset)
-	if err := Init(t.TempDir(), "app", "config.json"); err != nil {
+	dir := t.TempDir()
+	m := NewManager()
+	if err := m.Init(dir, "app", "config.json"); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	if defaultJSON != nil {
-		if err := RegisterDefaults(defaultJSON); err != nil {
+		if err := m.RegisterDefaults(defaultJSON); err != nil {
 			t.Fatalf("RegisterDefaults: %v", err)
 		}
 	}
-}
-
-// useFakeEditor 将包级编辑器启动函数替换为 fake，测试结束自动还原。
-// fake 收到的 path 是 editConfig 决定打开的配置文件路径，
-// 可在其中断言打开时的文件内容并写回新内容，模拟用户的编辑行为。
-func useFakeEditor(t *testing.T, fake func(path string) error) {
-	t.Helper()
-	orig := editLaunchEditor
-	editLaunchEditor = fake
-	t.Cleanup(func() { editLaunchEditor = orig })
+	return m, filepath.Join(dir, "app", "config.json")
 }
 
 // ---------- editConfig：文件缺失时先按模板创建 ----------
 
 func TestEditConfig_createsMissingFileThenEdits(t *testing.T) {
-	newTestStore(t, []byte(`{"meta": {}, "fields": {"port": 3000}}`))
+	m, wantPath := newTestManager(t, []byte(`{"meta": {}, "fields": {"port": 3000}}`))
 
 	var openedPath, openedContent string
-	useFakeEditor(t, func(path string) error {
+	// 假编辑器：记录打开时的内容，模拟用户把 port 改成 4000 后保存退出
+	m.editor = func(path string) error {
 		b, err := os.ReadFile(path)
 		if err != nil {
 			return err
 		}
 		openedPath, openedContent = path, string(b)
-		// 模拟用户把 port 改成 4000 后保存退出
 		return os.WriteFile(path, []byte(`{"meta": {}, "fields": {"port": 4000}}`), 0o600)
-	})
+	}
 
-	if err := editConfig(); err != nil {
+	if err := m.editConfig(); err != nil {
 		t.Fatalf("editConfig: unexpected error: %v", err)
 	}
 
 	// 假编辑器打开的路径应为装配出的配置文件路径
-	wantPath, err := configPath()
-	if err != nil {
-		t.Fatal(err)
-	}
 	if openedPath != wantPath {
 		t.Errorf("editor opened %q, want %q", openedPath, wantPath)
 	}
@@ -80,9 +68,9 @@ func TestEditConfig_createsMissingFileThenEdits(t *testing.T) {
 // ---------- editConfig：未注册模板且文件缺失 ----------
 
 func TestEditConfig_missingFileWithoutTemplate(t *testing.T) {
-	newTestStore(t, nil)
+	m, _ := newTestManager(t, nil)
 
-	if err := editConfig(); err == nil {
+	if err := m.editConfig(); err == nil {
 		t.Fatal("editConfig without template and missing file: expected error, got nil")
 	}
 }
@@ -92,13 +80,9 @@ func TestEditConfig_missingFileWithoutTemplate(t *testing.T) {
 // 已损坏的配置不被覆盖也不报 CorruptConfigError，
 // 而是把原始坏内容交给"编辑器"（用户），修复结果落盘。
 func TestEditConfig_corruptFileStillOpened(t *testing.T) {
-	newTestStore(t, []byte(`{"meta": {}, "fields": {"color": "red"}}`))
+	m, path := newTestManager(t, []byte(`{"meta": {}, "fields": {"color": "red"}}`))
 
 	// 手工放置一个损坏的配置文件
-	path, err := configPath()
-	if err != nil {
-		t.Fatal(err)
-	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -108,18 +92,18 @@ func TestEditConfig_corruptFileStillOpened(t *testing.T) {
 	}
 
 	var openedContent string
-	useFakeEditor(t, func(p string) error {
+	// 假编辑器：记录打开时的坏内容，模拟用户手工修复后保存
+	m.editor = func(p string) error {
 		b, err := os.ReadFile(p)
 		if err != nil {
 			return err
 		}
 		openedContent = string(b)
-		// 模拟用户手工修复坏文件后保存
 		return os.WriteFile(p, []byte(`{"meta": {}, "fields": {"color": "fixed"}}`), 0o600)
-	})
+	}
 
 	// 损坏是预期情况：不返回错误，直接交给编辑器处置
-	if err := editConfig(); err != nil {
+	if err := m.editConfig(); err != nil {
 		t.Fatalf("editConfig on corrupt file: unexpected error: %v", err)
 	}
 	if openedContent != string(corrupted) {
@@ -137,12 +121,8 @@ func TestEditConfig_corruptFileStillOpened(t *testing.T) {
 // ---------- editConfig：编辑器退出后的 JSON 校验 ----------
 
 func TestEditConfig_validationAfterEdit(t *testing.T) {
-	newTestStore(t, []byte(`{"meta": {}, "fields": {}}`))
+	m, path := newTestManager(t, []byte(`{"meta": {}, "fields": {}}`))
 
-	path, err := configPath()
-	if err != nil {
-		t.Fatal(err)
-	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -163,10 +143,10 @@ func TestEditConfig_validationAfterEdit(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.label, func(t *testing.T) {
-			useFakeEditor(t, func(p string) error {
+			m.editor = func(p string) error {
 				return os.WriteFile(p, []byte(tt.written), 0o600)
-			})
-			err := editConfig()
+			}
+			err := m.editConfig()
 			if !tt.wantErr {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
@@ -196,12 +176,8 @@ func TestEditConfig_validationAfterEdit(t *testing.T) {
 // 编辑器启动失败（如 $EDITOR 指向不存在的程序）时错误原样上抛，
 // 配置文件不被改动。
 func TestEditConfig_editorLaunchFails(t *testing.T) {
-	newTestStore(t, []byte(`{"meta": {}, "fields": {"key": "value"}}`))
+	m, path := newTestManager(t, []byte(`{"meta": {}, "fields": {"key": "value"}}`))
 
-	path, err := configPath()
-	if err != nil {
-		t.Fatal(err)
-	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -210,9 +186,9 @@ func TestEditConfig_editorLaunchFails(t *testing.T) {
 	}
 
 	wantErr := errors.New("exec: fake-editor not found")
-	useFakeEditor(t, func(path string) error { return wantErr })
+	m.editor = func(path string) error { return wantErr }
 
-	if err := editConfig(); !errors.Is(err, wantErr) {
+	if err := m.editConfig(); !errors.Is(err, wantErr) {
 		t.Fatalf("error = %v, want %v", err, wantErr)
 	}
 }
@@ -221,16 +197,16 @@ func TestEditConfig_editorLaunchFails(t *testing.T) {
 
 // HandleCLI 应把 "config --edit" 分发到 editConfig 并透传其结果。
 func TestHandleCLI_editRoute(t *testing.T) {
-	newTestStore(t, []byte(`{"meta": {}, "fields": {"routed": true}}`))
+	m, _ := newTestManager(t, []byte(`{"meta": {}, "fields": {"routed": true}}`))
 	calls := 0
-	useFakeEditor(t, func(path string) error {
+	m.editor = func(path string) error {
 		calls++
 		return nil // 不改文件，只验证路由
-	})
+	}
 
-	handled, err := HandleCLI([]string{"config", "--edit"})
-	if !handled {
-		t.Fatal("handled = false, want true")
+	shouldClose, err := m.HandleCLI([]string{"config", "--edit"})
+	if !shouldClose {
+		t.Fatal("shouldClose = false, want true")
 	}
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

@@ -22,27 +22,27 @@ func useTempConfigDir(t *testing.T) string {
 	return dir
 }
 
-// useStore 在 dir 下装配一份全新全局状态（Reset → Init → RegisterDefaults），
-// 测试结束时自动 Reset；之后由测试自行调用 appconfig.Load()。
-// defaultJSON 为空串表示不注册模板。可重复调用以模拟进程重启后的重新装配。
-func useStore(t *testing.T, dir, defaultJSON string) {
+// newManager 在 dir 下装配一个全新 Manager（Init → 可选 RegisterDefaults），
+// 之后由测试自行调用 Load。defaultJSON 为空串表示不注册模板；
+// 模拟进程重启时对同一 dir 再调一次即可。
+func newManager(t *testing.T, dir, defaultJSON string) *appconfig.Manager {
 	t.Helper()
-	appconfig.Reset()
-	t.Cleanup(appconfig.Reset)
-	if err := appconfig.Init(dir, "app", "config.json"); err != nil {
+	m := appconfig.NewManager()
+	if err := m.Init(dir, "app", "config.json"); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	if defaultJSON != "" {
-		if err := appconfig.RegisterDefaults([]byte(defaultJSON)); err != nil {
+		if err := m.RegisterDefaults([]byte(defaultJSON)); err != nil {
 			t.Fatalf("RegisterDefaults: %v", err)
 		}
 	}
+	return m
 }
 
-// loadStore 完成加载并断言成功。
-func loadStore(t *testing.T) *appconfig.Config {
+// loadManager 完成加载并断言成功。
+func loadManager(t *testing.T, m *appconfig.Manager) *appconfig.Config {
 	t.Helper()
-	c, err := appconfig.Load()
+	c, err := m.Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -53,25 +53,25 @@ func loadStore(t *testing.T) *appconfig.Config {
 
 func TestLoadCreatesFromTemplate(t *testing.T) {
 	dir := t.TempDir()
-	useStore(t, dir, `{"meta": {}, "fields": {"name": "demo", "port": 8080}}`)
+	m := newManager(t, dir, `{"meta": {}, "fields": {"name": "demo", "port": 8080}}`)
 
-	c := loadStore(t)
+	c := loadManager(t, m)
 	if name, ok := c.Get("name"); !ok || name != "demo" {
-		t.Fatalf("name = %v, %v", name, ok)
+		t.Fatalf("name = %v, %v; want demo, true", name, ok)
 	}
 	if port, ok := c.Get("port"); !ok || port != float64(8080) {
-		t.Fatalf("port = %v, %v", port, ok)
+		t.Fatalf("port = %v, %v; want 8080, true", port, ok)
 	}
 
-	// 第二次装配加载从磁盘读取，并保留之前的修改。
+	// 第二个 Manager（模拟重启）从磁盘读取，并保留之前的修改。
 	c.Set("port", 9090)
 	if err := c.Save(); err != nil {
 		t.Fatal(err)
 	}
-	useStore(t, dir, `{"meta": {}, "fields": {"name": "demo", "port": 8080}}`)
-	c2 := loadStore(t)
+	m2 := newManager(t, dir, `{"meta": {}, "fields": {"name": "demo", "port": 8080}}`)
+	c2 := loadManager(t, m2)
 	if port, ok := c2.Get("port"); !ok || port != float64(9090) {
-		t.Fatalf("port = %v, %v", port, ok)
+		t.Fatalf("port = %v, %v; want 9090, true", port, ok)
 	}
 }
 
@@ -81,9 +81,9 @@ func TestLoadCreatesFromTemplate(t *testing.T) {
 // 所以首末两次运行取出的类型一致，都是 float64。
 func TestLoadNumbersAreFloat64(t *testing.T) {
 	dir := t.TempDir()
-	useStore(t, dir, `{"meta": {}, "fields": {"port": 8080}}`)
+	m := newManager(t, dir, `{"meta": {}, "fields": {"port": 8080}}`)
 
-	c := loadStore(t)
+	c := loadManager(t, m)
 	port, ok := c.Get("port")
 	if !ok {
 		t.Fatal("port missing")
@@ -92,9 +92,9 @@ func TestLoadNumbersAreFloat64(t *testing.T) {
 		t.Fatalf("first run: port is %T, want float64", port)
 	}
 
-	// 模拟重启：Reset 后重新装配加载
-	useStore(t, dir, `{"meta": {}, "fields": {"port": 8080}}`)
-	c2 := loadStore(t)
+	// 模拟重启：新 Manager 重新装配加载
+	m2 := newManager(t, dir, `{"meta": {}, "fields": {"port": 8080}}`)
+	c2 := loadManager(t, m2)
 	port, ok = c2.Get("port")
 	if !ok {
 		t.Fatal("port missing")
@@ -107,10 +107,9 @@ func TestLoadNumbersAreFloat64(t *testing.T) {
 // ---------- 未注册模板且文件不存在 ----------
 
 func TestLoad_missingFileWithoutTemplate(t *testing.T) {
-	dir := t.TempDir()
-	useStore(t, dir, "")
+	m := newManager(t, t.TempDir(), "")
 
-	_, err := appconfig.Load()
+	_, err := m.Load()
 	if err == nil {
 		t.Fatal("Load without template and missing file: expected error, got nil")
 	}
@@ -124,13 +123,12 @@ func TestLoad_missingFileWithoutTemplate(t *testing.T) {
 // 不调用 Init 时，路径 = os.UserConfigDir() + 可执行文件名 + config.json。
 func TestLoad_lazyAssemblyDefaults(t *testing.T) {
 	dir := useTempConfigDir(t)
-	appconfig.Reset()
-	t.Cleanup(appconfig.Reset)
-	if err := appconfig.RegisterDefaults([]byte(`{"meta": {}, "fields": {"lazy": true}}`)); err != nil {
+	m := appconfig.NewManager()
+	if err := m.RegisterDefaults([]byte(`{"meta": {}, "fields": {"lazy": true}}`)); err != nil {
 		t.Fatalf("RegisterDefaults: %v", err)
 	}
 
-	c := loadStore(t)
+	c := loadManager(t, m)
 	if !strings.HasPrefix(c.Path(), dir) {
 		t.Errorf("path = %q, want under %q", c.Path(), dir)
 	}
@@ -144,44 +142,41 @@ func TestLoad_lazyAssemblyDefaults(t *testing.T) {
 
 // ---------- Init 装配约束 ----------
 
-// Init 只能成功调用一次；Reset 之后允许重新装配。
+// Init 只能成功调用一次；新 Manager 与旧实例互不影响。
 func TestInit_onlyOnce(t *testing.T) {
-	appconfig.Reset()
-	t.Cleanup(appconfig.Reset)
-	if err := appconfig.Init(t.TempDir(), "app", "config.json"); err != nil {
+	m := appconfig.NewManager()
+	if err := m.Init(t.TempDir(), "app", "config.json"); err != nil {
 		t.Fatalf("first Init: %v", err)
 	}
-	if err := appconfig.Init(t.TempDir(), "app", "config.json"); err == nil {
+	if err := m.Init(t.TempDir(), "app", "config.json"); err == nil {
 		t.Fatal("second Init: expected error, got nil")
 	}
 
-	appconfig.Reset()
-	if err := appconfig.Init(t.TempDir(), "app", "config.json"); err != nil {
-		t.Fatalf("Init after Reset: %v", err)
+	m2 := appconfig.NewManager()
+	if err := m2.Init(t.TempDir(), "app", "config.json"); err != nil {
+		t.Fatalf("Init on fresh Manager: %v", err)
 	}
 }
 
 // RegisterDefaults 只能注册一次。
 func TestRegisterDefaults_onlyOnce(t *testing.T) {
-	appconfig.Reset()
-	t.Cleanup(appconfig.Reset)
-	if err := appconfig.RegisterDefaults([]byte(`{"meta": {}, "fields": {}}`)); err != nil {
+	m := appconfig.NewManager()
+	if err := m.RegisterDefaults([]byte(`{"meta": {}, "fields": {}}`)); err != nil {
 		t.Fatalf("first RegisterDefaults: %v", err)
 	}
-	if err := appconfig.RegisterDefaults([]byte(`{"meta": {}, "fields": {}}`)); err == nil {
+	if err := m.RegisterDefaults([]byte(`{"meta": {}, "fields": {}}`)); err == nil {
 		t.Fatal("second RegisterDefaults: expected error, got nil")
 	}
 }
 
 // RegisterDefaults 立即校验模板：必须是合法的 JSON 对象。
 func TestRegisterDefaults_invalidTemplate(t *testing.T) {
-	appconfig.Reset()
-	t.Cleanup(appconfig.Reset)
-	if err := appconfig.RegisterDefaults([]byte(`{not valid json}`)); err == nil {
+	m := appconfig.NewManager()
+	if err := m.RegisterDefaults([]byte(`{not valid json}`)); err == nil {
 		t.Error("RegisterDefaults with invalid JSON: expected error, got nil")
 	}
 	// 注册失败后仍可重新注册合法模板（失败不占用"仅一次"名额）
-	if err := appconfig.RegisterDefaults([]byte(`{"meta": {}, "fields": {}}`)); err != nil {
+	if err := m.RegisterDefaults([]byte(`{"meta": {}, "fields": {}}`)); err != nil {
 		t.Errorf("RegisterDefaults after failed attempt: %v", err)
 	}
 }
@@ -190,8 +185,8 @@ func TestRegisterDefaults_invalidTemplate(t *testing.T) {
 
 func TestLoad_saveLoadRoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	useStore(t, dir, `{"meta": {}, "fields": {"key": "original"}}`)
-	c := loadStore(t)
+	m := newManager(t, dir, `{"meta": {}, "fields": {"key": "original"}}`)
+	c := loadManager(t, m)
 
 	c.Set("key", "modified")
 	c.Set("extra", float64(42))
@@ -199,8 +194,8 @@ func TestLoad_saveLoadRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	useStore(t, dir, `{"meta": {}, "fields": {"key": "original"}}`)
-	c2 := loadStore(t)
+	m2 := newManager(t, dir, `{"meta": {}, "fields": {"key": "original"}}`)
+	c2 := loadManager(t, m2)
 
 	if val, ok := c2.Get("key"); !ok || val != "modified" {
 		t.Errorf("key = %v, %v; want modified, true", val, ok)
@@ -214,8 +209,8 @@ func TestLoad_saveLoadRoundTrip(t *testing.T) {
 
 func TestLoad_secondLoadIgnoresDefaults(t *testing.T) {
 	dir := t.TempDir()
-	useStore(t, dir, `{"meta": {}, "fields": {"color": "red"}}`)
-	c := loadStore(t)
+	m := newManager(t, dir, `{"meta": {}, "fields": {"color": "red"}}`)
+	c := loadManager(t, m)
 
 	c.Set("color", "blue")
 	if err := c.Save(); err != nil {
@@ -223,8 +218,8 @@ func TestLoad_secondLoadIgnoresDefaults(t *testing.T) {
 	}
 
 	// 用不同的默认值重新装配加载，应读到磁盘上的 "blue" 而非新默认的 "green"。
-	useStore(t, dir, `{"meta": {}, "fields": {"color": "green"}}`)
-	c2 := loadStore(t)
+	m2 := newManager(t, dir, `{"meta": {}, "fields": {"color": "green"}}`)
+	c2 := loadManager(t, m2)
 	if val, ok := c2.Get("color"); !ok || val != "blue" {
 		t.Errorf("color = %v, %v; want blue (from disk), true", val, ok)
 	}
@@ -233,8 +228,8 @@ func TestLoad_secondLoadIgnoresDefaults(t *testing.T) {
 // ---------- Get 不存在的 key ----------
 
 func TestLoad_getMissingKey(t *testing.T) {
-	useStore(t, t.TempDir(), `{"meta": {}, "fields": {"exists": true}}`)
-	c := loadStore(t)
+	m := newManager(t, t.TempDir(), `{"meta": {}, "fields": {"exists": true}}`)
+	c := loadManager(t, m)
 
 	val, ok := c.Get("nonexistent")
 	if ok {
@@ -248,8 +243,8 @@ func TestLoad_getMissingKey(t *testing.T) {
 // ---------- Schema + Config 协作：Check 端到端 ----------
 
 func TestSchema_checkWithConfig(t *testing.T) {
-	useStore(t, t.TempDir(), `{"meta": {}, "fields": {"host": "localhost", "port": 8080}}`)
-	c := loadStore(t)
+	m := newManager(t, t.TempDir(), `{"meta": {}, "fields": {"host": "localhost", "port": 8080}}`)
+	c := loadManager(t, m)
 
 	schema := appconfig.Schema{
 		"host": {Type: appconfig.TypeString, Required: true},
@@ -274,8 +269,8 @@ func TestSchema_checkWithConfig(t *testing.T) {
 func TestSchema_normalizeAndSaveBack(t *testing.T) {
 	dir := t.TempDir()
 	// 首次加载只有 host，缺少 port
-	useStore(t, dir, `{"meta": {}, "fields": {"host": "localhost"}}`)
-	c := loadStore(t)
+	m := newManager(t, dir, `{"meta": {}, "fields": {"host": "localhost"}}`)
+	c := loadManager(t, m)
 
 	schema := appconfig.Schema{
 		"host": {Type: appconfig.TypeString, Required: true},
@@ -308,8 +303,8 @@ func TestSchema_normalizeAndSaveBack(t *testing.T) {
 	}
 
 	// 重新装配加载验证 port 已持久化
-	useStore(t, dir, `{"meta": {}, "fields": {"host": "localhost"}}`)
-	c2 := loadStore(t)
+	m2 := newManager(t, dir, `{"meta": {}, "fields": {"host": "localhost"}}`)
+	c2 := loadManager(t, m2)
 	if port, ok := c2.Get("port"); !ok || port != float64(3000) {
 		t.Errorf("port after normalize+save = %v, %v; want 3000, true", port, ok)
 	}
@@ -321,8 +316,8 @@ func TestSchema_normalizeAndSaveBack(t *testing.T) {
 // 不提供默认值降级，且不覆盖磁盘上的坏文件。
 func TestLoad_corruptFileReturnsTypedError(t *testing.T) {
 	dir := t.TempDir()
-	useStore(t, dir, `{"meta": {"version": "1"}, "fields": {"color": "red"}}`)
-	c := loadStore(t)
+	m := newManager(t, dir, `{"meta": {"version": "1"}, "fields": {"color": "red"}}`)
+	c := loadManager(t, m)
 
 	// 手动把配置文件改坏
 	path := c.Path()
@@ -331,9 +326,9 @@ func TestLoad_corruptFileReturnsTypedError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 重新装配加载：应返回错误和 nil 配置，杜绝调用方拿默认值静默继续
-	useStore(t, dir, `{"meta": {"version": "1"}, "fields": {"color": "red"}}`)
-	_, err := appconfig.Load()
+	// 新 Manager（模拟重启）加载：应返回错误和 nil 配置，杜绝调用方拿默认值静默继续
+	m2 := newManager(t, dir, `{"meta": {"version": "1"}, "fields": {"color": "red"}}`)
+	_, err := m2.Load()
 	if err == nil {
 		t.Fatal("Load with corrupt file: expected error, got nil")
 	}
@@ -361,7 +356,7 @@ func TestLoad_corruptFileReturnsTypedError(t *testing.T) {
 
 // Repair 是预留接口，当前阶段固定返回未实现错误。
 func TestRepair_notImplementedYet(t *testing.T) {
-	if err := appconfig.Repair(); err == nil {
+	if err := appconfig.NewManager().Repair(); err == nil {
 		t.Fatal("Repair: expected error, got nil")
 	}
 }
@@ -380,8 +375,8 @@ type sampleSettings struct {
 // DecodeFields 往返一致：写入 → 读回字段值相同。
 func TestStructBinding_roundTrip(t *testing.T) {
 	dir := t.TempDir()
-	useStore(t, dir, `{"meta": {}, "fields": {"name": "demo", "port": 8080}}`)
-	c := loadStore(t)
+	m := newManager(t, dir, `{"meta": {}, "fields": {"name": "demo", "port": 8080}}`)
+	c := loadManager(t, m)
 
 	in := sampleSettings{
 		Name:  "changed",
@@ -397,8 +392,8 @@ func TestStructBinding_roundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	useStore(t, dir, `{"meta": {}, "fields": {"name": "demo", "port": 8080}}`)
-	c2 := loadStore(t)
+	m2 := newManager(t, dir, `{"meta": {}, "fields": {"name": "demo", "port": 8080}}`)
+	c2 := loadManager(t, m2)
 	var out sampleSettings
 	if err := c2.DecodeFields(&out); err != nil {
 		t.Fatalf("DecodeFields: %v", err)
@@ -416,8 +411,8 @@ func TestStructBinding_roundTrip(t *testing.T) {
 
 // DecodeFields 对 fields 中缺失的键保持 target 零值；指针字段为 nil 表示"未设置"。
 func TestStructBinding_missingKeysAndNilPointer(t *testing.T) {
-	useStore(t, t.TempDir(), `{"meta": {}, "fields": {"name": "only-name"}}`)
-	c := loadStore(t)
+	m := newManager(t, t.TempDir(), `{"meta": {}, "fields": {"name": "only-name"}}`)
+	c := loadManager(t, m)
 
 	var out sampleSettings
 	if err := c.DecodeFields(&out); err != nil {
@@ -437,8 +432,8 @@ func TestStructBinding_missingKeysAndNilPointer(t *testing.T) {
 // DecodeFields 能区分"显式 null/零值"与"缺失"：指针字段指向零值而非 nil。
 func TestStructBinding_explicitZeroVsMissing(t *testing.T) {
 	// optional 显式为 null（JSON null 解码到 *string 为 nil）——用空串更直观
-	useStore(t, t.TempDir(), `{"meta": {}, "fields": {"optional": ""}}`)
-	c := loadStore(t)
+	m := newManager(t, t.TempDir(), `{"meta": {}, "fields": {"optional": ""}}`)
+	c := loadManager(t, m)
 
 	var out sampleSettings
 	if err := c.DecodeFields(&out); err != nil {
@@ -454,8 +449,8 @@ func TestStructBinding_explicitZeroVsMissing(t *testing.T) {
 
 // SetFieldsFrom 拒绝 nil 源和非对象编码。
 func TestStructBinding_setFieldsFromRejectsInvalid(t *testing.T) {
-	useStore(t, t.TempDir(), `{"meta": {}, "fields": {}}`)
-	c := loadStore(t)
+	m := newManager(t, t.TempDir(), `{"meta": {}, "fields": {}}`)
+	c := loadManager(t, m)
 
 	if err := c.SetFieldsFrom(nil); err == nil {
 		t.Error("SetFieldsFrom(nil): expected error, got nil")
@@ -470,8 +465,8 @@ func TestStructBinding_setFieldsFromRejectsInvalid(t *testing.T) {
 
 // Config.Check 直接作用于 fields 层，无需手动提取 map。
 func TestConfig_checkDirectlyOnFields(t *testing.T) {
-	useStore(t, t.TempDir(), `{"meta": {}, "fields": {"host": "localhost", "port": 8080}}`)
-	c := loadStore(t)
+	m := newManager(t, t.TempDir(), `{"meta": {}, "fields": {"host": "localhost", "port": 8080}}`)
+	c := loadManager(t, m)
 
 	schema := appconfig.Schema{
 		"host": {Type: appconfig.TypeString, Required: true},
@@ -484,8 +479,8 @@ func TestConfig_checkDirectlyOnFields(t *testing.T) {
 
 // Config.Normalize 在 Valid 状态下为 no-op，不报错。
 func TestConfig_normalizeValidIsNoop(t *testing.T) {
-	useStore(t, t.TempDir(), `{"meta": {}, "fields": {"key": "value"}}`)
-	c := loadStore(t)
+	m := newManager(t, t.TempDir(), `{"meta": {}, "fields": {"key": "value"}}`)
+	c := loadManager(t, m)
 
 	schema := appconfig.Schema{
 		"key": {Type: appconfig.TypeString, Required: true},
@@ -500,8 +495,8 @@ func TestConfig_normalizeValidIsNoop(t *testing.T) {
 
 // Config.Normalize 补全缺失默认值并写回 fields 层。
 func TestConfig_normalizeFillsDefaultsAndWritesBack(t *testing.T) {
-	useStore(t, t.TempDir(), `{"meta": {}, "fields": {"host": "localhost"}}`)
-	c := loadStore(t)
+	m := newManager(t, t.TempDir(), `{"meta": {}, "fields": {"host": "localhost"}}`)
+	c := loadManager(t, m)
 
 	schema := appconfig.Schema{
 		"host": {Type: appconfig.TypeString, Required: true},
@@ -520,8 +515,8 @@ func TestConfig_normalizeFillsDefaultsAndWritesBack(t *testing.T) {
 
 // Config.Normalize 删除多余字段。
 func TestConfig_normalizeRemovesExtraFields(t *testing.T) {
-	useStore(t, t.TempDir(), `{"meta": {}, "fields": {"host": "localhost", "extra": "junk"}}`)
-	c := loadStore(t)
+	m := newManager(t, t.TempDir(), `{"meta": {}, "fields": {"host": "localhost", "extra": "junk"}}`)
+	c := loadManager(t, m)
 
 	schema := appconfig.Schema{
 		"host": {Type: appconfig.TypeString, Required: true},
@@ -542,8 +537,8 @@ func TestConfig_normalizeRemovesExtraFields(t *testing.T) {
 
 // Config.Normalize 在 Invalid 状态下返回错误，不修改 fields。
 func TestConfig_normalizeInvalidReturnsError(t *testing.T) {
-	useStore(t, t.TempDir(), `{"meta": {}, "fields": {"port": "not-a-number"}}`)
-	c := loadStore(t)
+	m := newManager(t, t.TempDir(), `{"meta": {}, "fields": {"port": "not-a-number"}}`)
+	c := loadManager(t, m)
 
 	schema := appconfig.Schema{
 		"port": {Type: appconfig.TypeFloat, Required: true},
@@ -564,6 +559,7 @@ func TestConfig_normalizeInvalidReturnsError(t *testing.T) {
 
 // 不是以 config 开头的参数不接管，也不产生错误。
 func TestHandleCLI_ignoresNonConfigArgs(t *testing.T) {
+	m := appconfig.NewManager()
 	for _, args := range [][]string{
 		{},                        // 客户端无任何参数
 		{"serve"},                 // 正常业务参数
@@ -571,9 +567,9 @@ func TestHandleCLI_ignoresNonConfigArgs(t *testing.T) {
 		{"Config"},                // 大小写敏感，不接管
 		{"config.json", "--edit"}, // 子命令必须完整等于 config
 	} {
-		handled, err := appconfig.HandleCLI(args)
-		if handled {
-			t.Errorf("HandleCLI(%q): handled = true, want false", args)
+		shouldClose, err := m.HandleCLI(args)
+		if shouldClose {
+			t.Errorf("HandleCLI(%q): shouldClose = true, want false", args)
 		}
 		if err != nil {
 			t.Errorf("HandleCLI(%q): unexpected error: %v", args, err)
@@ -582,10 +578,12 @@ func TestHandleCLI_ignoresNonConfigArgs(t *testing.T) {
 }
 
 // config 子命令分发：错误分支（表驱动）。
-// --edit 的成功路径不在此外部测试中执行：编辑器启动函数是未导出注入点，
-// 外部包无法替换，真跑会启动真实编辑器；该路径由内部包 cli_test.go 用
-// 假编辑器覆盖。
+// --edit 的成功路径不在此外部测试中执行：编辑器启动函数是 Manager 上未导出
+// 的字段，外部包无法注入，真跑会启动真实编辑器；该路径由内部包 cli_test.go
+// 用假编辑器覆盖。
 func TestHandleCLI_dispatch(t *testing.T) {
+	// 用法错误分支不触碰任何装配状态，裸 Manager 即可触发
+	m := appconfig.NewManager()
 	tests := []struct {
 		label       string
 		args        []string
@@ -600,9 +598,9 @@ func TestHandleCLI_dispatch(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.label, func(t *testing.T) {
-			handled, err := appconfig.HandleCLI(tt.args)
-			if !handled {
-				t.Fatalf("handled = false, want true")
+			shouldClose, err := m.HandleCLI(tt.args)
+			if !shouldClose {
+				t.Fatalf("shouldClose = false, want true")
 			}
 			if !tt.wantErr {
 				if err != nil {

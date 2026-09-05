@@ -7,23 +7,22 @@ import (
 	"testing"
 )
 
-// newTestConfig 在独立临时目录中完成 Init + RegisterDefaults + Load，
-// 返回全局单例；测试结束时自动 Reset，避免用例间串扰。
-func newTestConfig(t *testing.T, defaultJSON []byte) *Config {
+// newTestConfig 在独立临时目录中用全新 Manager 完成 Init + RegisterDefaults + Load，
+// 返回该 Manager 与加载好的配置对象；每个用例各自持有实例，无需全局清理。
+func newTestConfig(t *testing.T, defaultJSON []byte) (*Manager, *Config) {
 	t.Helper()
-	Reset()
-	t.Cleanup(Reset)
-	if err := Init(t.TempDir(), "app", "config.json"); err != nil {
+	m := NewManager()
+	if err := m.Init(t.TempDir(), "app", "config.json"); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := RegisterDefaults(defaultJSON); err != nil {
+	if err := m.RegisterDefaults(defaultJSON); err != nil {
 		t.Fatalf("RegisterDefaults: %v", err)
 	}
-	c, err := Load()
+	c, err := m.Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	return c
+	return m, c
 }
 
 // ---------- load() 正例 ----------
@@ -124,17 +123,16 @@ func TestSaveLoad(t *testing.T) {
 	}
 }
 
-// ---------- 全局装配：Init / RegisterDefaults / Load ----------
+// ---------- 装配：Init / RegisterDefaults / Load ----------
 
 // 未注册模板且文件不存在时，Load 应报错而不是静默创建空配置。
 func TestLoad_missingFileWithoutTemplate(t *testing.T) {
-	Reset()
-	t.Cleanup(Reset)
-	if err := Init(t.TempDir(), "app", "config.json"); err != nil {
+	m := NewManager()
+	if err := m.Init(t.TempDir(), "app", "config.json"); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 
-	_, err := Load()
+	_, err := m.Load()
 	if err == nil {
 		t.Fatal("Load without template and missing file: expected error, got nil")
 	}
@@ -143,46 +141,88 @@ func TestLoad_missingFileWithoutTemplate(t *testing.T) {
 	}
 }
 
-// Load 是进程内单例：后续调用返回同一对象，并填充导出的全局 ConfigManager。
-func TestLoad_returnsSingleton(t *testing.T) {
-	c := newTestConfig(t, []byte(`{"meta": {}, "fields": {"key": "value"}}`))
+// Load 幂等：同一 Manager 后续调用返回同一对象；
+// 指向同一目录的第二个 Manager（模拟进程重启）从磁盘加载另一实例。
+func TestLoad_idempotent(t *testing.T) {
+	dir := t.TempDir()
+	template := []byte(`{"meta": {}, "fields": {"key": "value"}}`)
 
-	c2, err := Load()
+	m := NewManager()
+	if err := m.Init(dir, "app", "config.json"); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := m.RegisterDefaults(template); err != nil {
+		t.Fatalf("RegisterDefaults: %v", err)
+	}
+	c, err := m.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	c2, err := m.Load()
 	if err != nil {
 		t.Fatalf("second Load: %v", err)
 	}
 	if c2 != c {
-		t.Error("Load should return the same singleton instance")
-	}
-	if ConfigManager != c {
-		t.Error("ConfigManager should point to the loaded singleton")
+		t.Error("Load should return the same instance")
 	}
 
-	// Reset 后 ConfigManager 归零，允许重新装配
-	Reset()
-	if ConfigManager != nil {
-		t.Error("ConfigManager should be nil after Reset")
+	m2 := NewManager()
+	if err := m2.Init(dir, "app", "config.json"); err != nil {
+		t.Fatalf("Init second manager: %v", err)
 	}
-	if err := Init(t.TempDir(), "app", "config.json"); err != nil {
-		t.Fatalf("Init after Reset: %v", err)
+	if err := m2.RegisterDefaults(template); err != nil {
+		t.Fatalf("RegisterDefaults second manager: %v", err)
+	}
+	c3, err := m2.Load()
+	if err != nil {
+		t.Fatalf("Load second manager: %v", err)
+	}
+	if c3 == c {
+		t.Error("two managers should hold distinct Config instances")
+	}
+	if c3.Path() != c.Path() {
+		t.Errorf("path = %q, want %q", c3.Path(), c.Path())
+	}
+	if v, ok := c3.Get("key"); !ok || v != "value" {
+		t.Errorf("key = %v, %v; want value, true", v, ok)
 	}
 }
 
-// Init 重复调用报错；Reset 之后允许重新装配。
+// Init 重复调用报错；全新 Manager 可正常装配，实例间互不干扰。
 func TestInit_onlyOnce(t *testing.T) {
-	Reset()
-	t.Cleanup(Reset)
-	if err := Init(t.TempDir(), "app", "config.json"); err != nil {
+	m := NewManager()
+	if err := m.Init(t.TempDir(), "app", "config.json"); err != nil {
 		t.Fatalf("first Init: %v", err)
 	}
-	if err := Init(t.TempDir(), "app", "config.json"); err == nil {
+	if err := m.Init(t.TempDir(), "app", "config.json"); err == nil {
 		t.Fatal("second Init: expected error, got nil")
 	}
 
-	// Reset 后可重新装配
-	Reset()
-	if err := Init(t.TempDir(), "app", "config.json"); err != nil {
-		t.Fatalf("Init after Reset: %v", err)
+	// 新 Manager 与旧实例互不影响
+	m2 := NewManager()
+	if err := m2.Init(t.TempDir(), "app", "config.json"); err != nil {
+		t.Fatalf("Init on fresh Manager: %v", err)
+	}
+}
+
+// 懒装配 Load 成功后（cfg 非 nil）Init 必须报错，
+// 覆盖 once-guard 中 m.cfg != nil 这一半。
+func TestInit_afterLazyLoad(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("AppData", dir)         // Windows
+	t.Setenv("XDG_CONFIG_HOME", dir) // Linux
+	t.Setenv("HOME", dir)            // macOS
+
+	m := NewManager()
+	if err := m.RegisterDefaults([]byte(`{"meta": {}, "fields": {"lazy": true}}`)); err != nil {
+		t.Fatalf("RegisterDefaults: %v", err)
+	}
+	if _, err := m.Load(); err != nil {
+		t.Fatalf("lazy Load: %v", err)
+	}
+	if err := m.Init(t.TempDir(), "app", "config.json"); err == nil {
+		t.Fatal("Init after successful lazy Load: expected error, got nil")
 	}
 }
 
@@ -202,9 +242,8 @@ func TestInit_invalidArguments(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.label, func(t *testing.T) {
-			Reset()
-			t.Cleanup(Reset)
-			if err := Init(tt.firstDir, tt.secondDir, tt.fileName); err == nil {
+			m := NewManager()
+			if err := m.Init(tt.firstDir, tt.secondDir, tt.fileName); err == nil {
 				t.Errorf("Init(%q, %q, %q): expected error, got nil", tt.firstDir, tt.secondDir, tt.fileName)
 			}
 		})
@@ -225,9 +264,8 @@ func TestRegisterDefaults_validation(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.label, func(t *testing.T) {
-			Reset()
-			t.Cleanup(Reset)
-			err := RegisterDefaults([]byte(tt.template))
+			m := NewManager()
+			err := m.RegisterDefaults([]byte(tt.template))
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("RegisterDefaults: error = %v, wantErr = %v", err, tt.wantErr)
 			}
@@ -235,7 +273,7 @@ func TestRegisterDefaults_validation(t *testing.T) {
 				return
 			}
 			// 第二次注册报错
-			if err := RegisterDefaults([]byte(`{}`)); err == nil {
+			if err := m.RegisterDefaults([]byte(`{}`)); err == nil {
 				t.Error("second RegisterDefaults: expected error, got nil")
 			}
 		})
@@ -245,7 +283,7 @@ func TestRegisterDefaults_validation(t *testing.T) {
 // ---------- 目录权限 ----------
 
 func TestInitDirPermissions(t *testing.T) {
-	c := newTestConfig(t, []byte(`{"meta": {"schema_version": "1.0.0"}, "fields": {"key": "value"}}`))
+	_, c := newTestConfig(t, []byte(`{"meta": {"version": "1.0.0"}, "fields": {"key": "value"}}`))
 
 	// 验证配置目录权限至少为 0700。
 	info, err := os.Stat(filepath.Dir(c.Path()))

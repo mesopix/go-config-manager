@@ -1,12 +1,13 @@
 // 包 appconfig 是一个基于 JSON 文件的轻量级配置存储库。
 //
-// 全局用法：进程内只有一份配置。通过 Init（可选，装配存储路径）与
-// RegisterDefaults（可选，注册首运模板）完成装配，Load 返回进程内单例，
-// 后续所有读写都作用在这个对象上：
+// 实例用法：NewManager 创建一个 Manager，经 Init（可选，装配存储路径）与
+// RegisterDefaults（可选，注册首运模板）完成装配，Load 返回加载好的配置
+// 对象，后续所有读写都作用在这个对象上：
 //
-//	appconfig.Init(firstDir, secondDir, fileName) // 可选；空参数用缺省值
-//	appconfig.RegisterDefaults(defaultJSON)       // 可选；//go:embed 的模板
-//	c, err := appconfig.Load()
+//	m := appconfig.NewManager()
+//	m.Init("", "myapp", "config.json") // 可选；空参数用缺省值
+//	m.RegisterDefaults(defaultJSON)    // 可选；//go:embed 的模板
+//	c, err := m.Load()
 //	c.Set("port", 9090)
 //	c.Save()
 package appconfig
@@ -24,22 +25,27 @@ import (
 // defaultFileName 是配置文件名的缺省值。
 const defaultFileName = "config.json"
 
-// ConfigManager 是 Load 成功后的进程内全局配置对象：首次 Load 成功后可用，Reset 时置空。
-// 它由库维护，请勿在库外赋值；需要获取时调用 Load()（幂等，总是返回同一对象）。
-var ConfigManager *Config
+// Manager 装配并持有一份配置：存储路径、首运模板与已加载的配置对象。
+// 装配方法（Init/RegisterDefaults/Load/HandleCLI）在实例互斥锁上串行化，
+// 未导出辅助方法由调用方持锁。内含 sync.Mutex：勿按值复制，始终通过指针使用。
+// 指向同一路径的多个 Manager 之间没有文件锁，交叉写回时最后 Save 者胜出。
+type Manager struct {
+	mu       sync.Mutex
+	inited   bool                   // Init 是否已成功调用
+	baseDir  string                 // Init 装配的一级目录；未装配时为空
+	subDir   string                 // Init 装配的二级目录；未装配时为空
+	fileName string                 // Init 装配的文件名；未装配时为空
+	template []byte                 // RegisterDefaults 注册并校验过的首运模板；nil 表示未注册
+	cfg      *Config                // Load 成功后缓存的配置对象；nil 表示未加载
+	editor   func(path string) error // --edit 编辑器启动函数；nil 时回落 launchEditor，零值 Manager 亦可用
+}
 
-// 全局装配状态。cfgInited/cfgBaseDir/cfgSubDir/cfgFileName/cfgTemplate 记录
-// 显式装配结果。所有导出装配函数经 globalMu 串行化；未导出辅助函数由调用方持锁。
-var (
-	globalMu    sync.Mutex
-	cfgInited   bool   // Init 是否已成功调用
-	cfgBaseDir  string // Init 装配的一级目录；未装配时为空
-	cfgSubDir   string // Init 装配的二级目录；未装配时为空
-	cfgFileName string // Init 装配的文件名；未装配时为空
-	cfgTemplate []byte // RegisterDefaults 注册并校验过的首运模板；nil 表示未注册
-)
+// NewManager 创建一个未装配的 Manager。
+func NewManager() *Manager {
+	return &Manager{editor: launchEditor}
+}
 
-// Init 装配全局配置的存储路径，仅能在 Load 之前成功调用一次。
+// Init 装配该 Manager 的存储路径，仅能在成功 Load 之前调用一次。
 // 三个参数传空字符串时使用缺省值：
 //   - firstDir：配置文件一级目录（完整绝对路径），缺省为 os.UserConfigDir()；
 //   - secondDir：二级目录名，可含路径分隔符实现嵌套，缺省为可执行文件名
@@ -47,12 +53,13 @@ var (
 //   - fileName：配置文件名，缺省为 "config.json"。
 //
 // firstDir 必须是绝对路径；secondDir 不得为绝对路径或包含 ".." 上跳成分；
-// fileName 必须是纯文件名。重复调用返回错误；测试或重新装配先调用 Reset。
-func Init(firstDir, secondDir, fileName string) error {
-	globalMu.Lock()
-	defer globalMu.Unlock()
-	if cfgInited || ConfigManager != nil {
-		return errors.New("appconfig: Init must be called only once; call Reset first to re-assemble")
+// fileName 必须是纯文件名。重复调用或成功加载后调用返回错误；
+// 懒装配 Load 失败（cfg 仍为 nil）后仍可 Init。
+func (m *Manager) Init(firstDir, secondDir, fileName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.inited || m.cfg != nil {
+		return errors.New("appconfig: Init must be called only once per Manager")
 	}
 	if firstDir == "" {
 		dir, err := os.UserConfigDir()
@@ -76,8 +83,8 @@ func Init(firstDir, secondDir, fileName string) error {
 	if err := validateFileName(fileName); err != nil {
 		return err
 	}
-	cfgInited = true
-	cfgBaseDir, cfgSubDir, cfgFileName = firstDir, secondDir, fileName
+	m.inited = true
+	m.baseDir, m.subDir, m.fileName = firstDir, secondDir, fileName
 	return nil
 }
 
@@ -108,36 +115,27 @@ func defaultSubDir() string {
 }
 
 // RegisterDefaults 注册首运创建配置文件所用的默认模板，仅能注册一次。
-// defaultJSON 必须是合法的 JSON 对象，注册时立即校验，非法即报错。
-func RegisterDefaults(defaultJSON []byte) error {
-	globalMu.Lock()
-	defer globalMu.Unlock()
-	if cfgTemplate != nil {
-		return errors.New("appconfig: defaults already registered; call Reset first to re-register")
+// defaultJSON 必须是合法的 JSON 对象，注册时立即校验，非法即报错；
+// 校验失败不消耗"仅一次"名额，可修正后重试。
+func (m *Manager) RegisterDefaults(defaultJSON []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.template != nil {
+		return errors.New("appconfig: defaults already registered on this Manager")
 	}
 	var object map[string]any
 	if err := json.Unmarshal(defaultJSON, &object); err != nil {
 		return fmt.Errorf("appconfig: default template must be a JSON object: %w", err)
 	}
-	cfgTemplate = defaultJSON
+	m.template = defaultJSON
 	return nil
 }
 
-// Reset 清空全局装配状态与已加载的单例，回到未初始化状态。
-// 仅供测试或需要重新装配的场景使用；常规代码不应调用。
-func Reset() {
-	globalMu.Lock()
-	defer globalMu.Unlock()
-	cfgInited = false
-	cfgBaseDir, cfgSubDir, cfgFileName = "", "", ""
-	cfgTemplate = nil
-	ConfigManager = nil
-}
-
-// configPath 返回配置文件完整路径，不做磁盘操作。调用方需持有 globalMu。
-func configPath() (string, error) {
-	base, sub, name := cfgBaseDir, cfgSubDir, cfgFileName
-	if !cfgInited {
+// path 返回配置文件完整路径，不做磁盘操作。调用方需持有 m.mu。
+// 未显式装配时每次调用按缺省值重算，不把结果物化进字段。
+func (m *Manager) path() (string, error) {
+	base, sub, name := m.baseDir, m.subDir, m.fileName
+	if !m.inited {
 		// 未显式装配：全部使用缺省值懒装配
 		dir, err := os.UserConfigDir()
 		if err != nil {
@@ -150,51 +148,51 @@ func configPath() (string, error) {
 	return filepath.Join(base, sub, name), nil
 }
 
-// Load 返回全局配置对象（进程内单例），并把它填充到导出的 ConfigManager。
+// Load 返回该 Manager 的配置对象（幂等，后续调用返回同一对象）。
 // 首次调用完成路径装配并加载：文件不存在且已注册模板时按首运流程创建，
 // 并从磁盘重读（保证数值类型与后续运行一致）；文件存在但无法读取或解析时
 // 返回 nil 和 *CorruptConfigError，不提供默认值降级，也不覆盖磁盘上的坏文件；
-// 文件不存在且未注册模板时返回错误。后续调用返回同一对象。
+// 文件不存在且未注册模板时返回错误。
 // 未调用 Init 时按全缺省值装配（用户配置目录 + 可执行文件名 + config.json）。
-func Load() (*Config, error) {
-	globalMu.Lock()
-	defer globalMu.Unlock()
-	if ConfigManager != nil {
-		return ConfigManager, nil
+func (m *Manager) Load() (*Config, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.cfg != nil {
+		return m.cfg, nil
 	}
-	path, err := configPath()
+	path, err := m.path()
 	if err != nil {
 		return nil, err
 	}
 	loaded, err := load(path)
 	if err == nil {
-		ConfigManager = loaded
-		return ConfigManager, nil
+		m.cfg = loaded
+		return m.cfg, nil
 	}
 	if !os.IsNotExist(err) {
 		return nil, &CorruptConfigError{Path: path, Err: err}
 	}
 	// 首次运行：按模板创建后再从磁盘重读
-	if _, err := createFromDefaults(path); err != nil {
+	if _, err := m.createFromDefaults(path); err != nil {
 		return nil, err
 	}
-	ConfigManager, err = load(path)
+	m.cfg, err = load(path)
 	if err != nil {
 		return nil, err
 	}
-	return ConfigManager, nil
+	return m.cfg, nil
 }
 
 // createFromDefaults 在 path 处按已注册模板创建配置文件（含目录）。
-// 未注册模板时报错。调用方需持有 globalMu。
-func createFromDefaults(path string) (*Config, error) {
-	if cfgTemplate == nil {
+// 未注册模板时报错。调用方需持有 m.mu。
+func (m *Manager) createFromDefaults(path string) (*Config, error) {
+	if m.template == nil {
 		return nil, fmt.Errorf("appconfig: config file %s does not exist and no defaults registered", path)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), configDirMode); err != nil {
 		return nil, err
 	}
-	created, err := newConfigFromDefaults(path, cfgTemplate)
+	created, err := newConfigFromDefaults(path, m.template)
 	if err != nil {
 		return nil, err
 	}
@@ -207,15 +205,15 @@ func createFromDefaults(path string) (*Config, error) {
 // ensureConfigFile 返回配置文件路径，缺失且已注册模板时按首运流程创建。
 // 已存在的文件（含损坏文件）原样保留——把坏文件交给编辑器手工修复
 // 正是 --edit 子命令的用途。
-func ensureConfigFile() (string, error) {
-	globalMu.Lock()
-	defer globalMu.Unlock()
-	path, err := configPath()
+func (m *Manager) ensureConfigFile() (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	path, err := m.path()
 	if err != nil {
 		return "", err
 	}
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		if _, err := createFromDefaults(path); err != nil {
+		if _, err := m.createFromDefaults(path); err != nil {
 			return "", err
 		}
 	} else if err != nil {
@@ -241,9 +239,9 @@ func (e *CorruptConfigError) Unwrap() error {
 	return e.Err
 }
 
-// Repair 修复全局配置对应的损坏配置文件。预留接口，尚未实现；
+// Repair 修复该 Manager 对应的损坏配置文件。预留接口，尚未实现；
 // 未来版本将基于已注册模板重建配置文件或引导用户修复。
-func Repair() error {
+func (m *Manager) Repair() error {
 	return errRepairNotImplemented
 }
 
@@ -256,7 +254,7 @@ const UnknownVersion = "UNKNOWN"
 type Config struct {
 	path            string
 	data            map[string]any
-	declaredVersion string // 从 config.json meta.schema_version 读取的原始版本
+	declaredVersion string // 从 config.json meta.version 读取的原始版本
 	resolvedVersion string // 经 schema 校验后确定的实际版本
 }
 

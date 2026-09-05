@@ -22,11 +22,12 @@ const cliUsage = `usage: <program> config --edit
 
 // HandleCLI 接管客户端命令行中的 config 子命令。
 // args 应传入 os.Args[1:]：当 args[0] 恰为 "config" 时，接管该参数及其后的
-// 所有参数并返回 handled = true，客户端应跳过正常流程——出错时打印 err
+// 所有参数并返回 shouldClose = true，客户端应跳过正常流程——出错时打印 err
 // 并以非零码退出，否则直接退出（--edit 的用户反馈由库自己输出）。
-// 配置文件位置与首运模板来自全局装配（Init/RegisterDefaults），
-// 未装配时使用缺省值。不是以 config 开头时返回 handled = false，不做任何事。
-func HandleCLI(args []string) (bool, error) {
+// 配置文件位置与首运模板来自该 Manager 实例的装配（Init/RegisterDefaults），
+// 未装配时使用缺省值。不是以 config 开头时返回 shouldClose = false，不做任何事。
+// 推荐在 Load 之前调用：--edit 的修复结果可被本次运行的 Load 直接读到。
+func (m *Manager) HandleCLI(args []string) (shouldClose bool, err error) {
 	// 空参数或第一个参数不是 config：不接管
 	if len(args) == 0 || args[0] != cliCommand {
 		return false, nil
@@ -44,25 +45,30 @@ func HandleCLI(args []string) (bool, error) {
 			return true, fmt.Errorf("appconfig: unexpected arguments after --edit: %s\n\n%s",
 				strings.Join(args[2:], " "), cliUsage)
 		}
-		return true, editConfig()
+		return true, m.editConfig()
 	default:
 		return true, fmt.Errorf("appconfig: unknown config subcommand %q\n\n%s", args[1], cliUsage)
 	}
 }
 
-// editConfig 打开全局配置文件供手动编辑。
+// editConfig 打开该 Manager 的配置文件供手动编辑。
 // 文件缺失且已注册模板时先按模板创建；已存在的损坏文件原样打开，
 // 由用户手工修复（坏文件不被覆盖是库的设计契约）。
 // 阻塞等待编辑器退出后重读文件，校验必须是 JSON 对象（与 {meta, fields}
 // 形状一致），非法时返回带解析细节的错误；合法时向标准输出打印一行确认。
-func editConfig() error {
-	path, err := ensureConfigFile()
+// 编辑器在互斥锁之外启动，避免编辑期间占用装配锁。
+func (m *Manager) editConfig() error {
+	path, err := m.ensureConfigFile()
 	if err != nil {
 		return err
 	}
 
-	// 阻塞等待用户编辑完成
-	if err := editLaunchEditor(path); err != nil {
+	// 阻塞等待用户编辑完成；editor 为 nil（如零值 Manager）时回落默认启动器
+	launch := m.editor
+	if launch == nil {
+		launch = launchEditor
+	}
+	if err := launch(path); err != nil {
 		return err
 	}
 
@@ -79,10 +85,6 @@ func editConfig() error {
 	fmt.Printf("config file edited: %s (JSON valid)\n", path)
 	return nil
 }
-
-// editLaunchEditor 启动编辑器打开配置文件并阻塞等待其退出。
-// 声明为包级变量，便于测试注入假编辑器；生产代码不要替换它。
-var editLaunchEditor = launchEditor
 
 // launchEditor 以阻塞方式启动编辑器打开 path，等待其退出。
 // 标准输入输出接到当前进程，保证终端编辑器（vim/nano 等）可用。

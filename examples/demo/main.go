@@ -21,9 +21,18 @@ var defaultConfigJSON []byte
 var embeddedSchemaJSON []byte
 
 func main() {
+	m := appconfig.NewManager()
+
+	// 注册首运模板。
+	// 必须在 HandleCLI 之前：首运机器上 config --edit 要靠模板先创建文件。
+	if err := m.RegisterDefaults(defaultConfigJSON); err != nil {
+		log.Fatal(err)
+	}
+
 	// CLI 接管：第一个参数是 config 时，该参数及其后的所有参数交给库处理，
 	// 处理完毕直接结束进程，不进入正常业务流程。
-	if handled, err := appconfig.HandleCLI(os.Args[1:]); handled {
+	// 放在 Load 之前：--edit 的修复结果可被本次运行的 Load 直接读到。
+	if shouldClose, err := m.HandleCLI(os.Args[1:]); shouldClose {
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -31,13 +40,10 @@ func main() {
 		return
 	}
 
-	// 注册首运模板并加载进程内单例。
-	// 未调用 Init 时按缺省值装配：用户配置目录 + 可执行文件名 + config.json；
-	// exe 改名会改变缺省路径，需要稳定路径时先调用 Init 显式指定。
-	if err := appconfig.RegisterDefaults(defaultConfigJSON); err != nil {
-		log.Fatal(err)
-	}
-	c, err := appconfig.Load()
+	// 加载配置。未调用 Init 时按缺省值装配：用户配置目录 + 可执行文件名 +
+	// config.json；exe 改名会改变缺省路径，需要稳定路径时先调用
+	// m.Init("", "app", "config.json") 显式指定。
+	c, err := m.Load()
 	if err != nil {
 		log.Fatal(err)
 	}
