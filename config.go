@@ -127,6 +127,10 @@ func (m *Manager) RegisterDefaults(defaultJSON []byte) error {
 	if err := json.Unmarshal(defaultJSON, &object); err != nil {
 		return fmt.Errorf("appconfig: default template must be a JSON object: %w", err)
 	}
+	// JSON null 解析为 nil map 且不报错，需显式拒绝
+	if object == nil {
+		return errors.New("appconfig: default template must be a JSON object, got null")
+	}
 	m.template = defaultJSON
 	return nil
 }

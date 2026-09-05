@@ -81,6 +81,10 @@ func (m *Manager) editConfig() error {
 	if err := json.Unmarshal(b, &object); err != nil {
 		return fmt.Errorf("edited config file %s is not a valid JSON object: %w", path, err)
 	}
+	// JSON null 解析为 nil map 且不报错，需显式拒绝
+	if object == nil {
+		return fmt.Errorf("edited config file %s is not a valid JSON object: got null", path)
+	}
 
 	fmt.Printf("config file edited: %s (JSON valid)\n", path)
 	return nil

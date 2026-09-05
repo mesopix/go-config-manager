@@ -280,6 +280,18 @@ func TestRegisterDefaults_validation(t *testing.T) {
 	}
 }
 
+// null 模板被拒绝且不消耗"仅一次"名额，可修正后重试。
+func TestRegisterDefaults_nullTemplateRejected(t *testing.T) {
+	m := NewManager()
+	if err := m.RegisterDefaults([]byte(`null`)); err == nil {
+		t.Fatal("RegisterDefaults(null): expected error, got nil")
+	}
+	// 被拒后名额未消耗，仍可注册合法模板
+	if err := m.RegisterDefaults([]byte(`{"meta": {}, "fields": {}}`)); err != nil {
+		t.Fatalf("RegisterDefaults after null rejection: %v", err)
+	}
+}
+
 // ---------- 目录权限 ----------
 
 func TestInitDirPermissions(t *testing.T) {

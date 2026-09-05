@@ -140,6 +140,7 @@ func TestEditConfig_validationAfterEdit(t *testing.T) {
 		{"syntax error", `{invalid`, true, "not a valid JSON object"},
 		{"array instead of object", `[1, 2, 3]`, true, "not a valid JSON object"},
 		{"bare string", `"hello"`, true, "not a valid JSON object"},
+		{"null after edit", `null`, true, "not a valid JSON object"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.label, func(t *testing.T) {
